@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>領土マップエディター</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<!-- Slot Selection Screen -->
+<div id="slot-screen" class="screen active">
+  <div class="slot-container">
+    <h1 class="slot-title">領土マップエディター</h1>
+    <p class="slot-subtitle">セーブスロットを選択</p>
+    <div id="slot-grid" class="slot-grid"></div>
+    <div class="slot-actions">
+      <label class="btn btn-secondary btn-import">
+        JSONインポート
+        <input type="file" id="import-file" accept=".json" hidden>
+      </label>
+    </div>
+  </div>
+</div>
+
+<!-- Map Size Selection Screen -->
+<div id="size-screen" class="screen">
+  <div class="size-container">
+    <h2>マップサイズ選択</h2>
+    <div class="size-select-row">
+      <label>幅 × 高さ</label>
+      <select id="map-size-select"></select>
+    </div>
+    <div id="size-preview" class="size-preview">100 × 100 = 10,000 マス</div>
+    <div class="size-actions">
+      <button class="btn btn-secondary" id="size-back">戻る</button>
+      <button class="btn btn-primary" id="size-confirm">作成</button>
+    </div>
+  </div>
+</div>
+
+<!-- Main Editor Screen -->
+<div id="editor-screen" class="screen">
+  <!-- Top Bar -->
+  <div id="topbar" class="topbar">
+    <div class="topbar-left">
+      <span class="topbar-logo">領土マップ</span>
+      <button class="btn-icon" id="btn-save" title="セーブ (Ctrl+S)">💾</button>
+      <button class="btn-icon" id="btn-undo" title="元に戻す (Ctrl+Z)">↩</button>
+      <div class="topbar-divider"></div>
+      <div class="terrain-brushes" id="terrain-brushes">
+        <button class="brush-btn" data-terrain="plain" title="平地">平地</button>
+        <button class="brush-btn" data-terrain="forest" title="森">森</button>
+        <button class="brush-btn" data-terrain="river" title="川">川</button>
+        <button class="brush-btn" data-terrain="mountain" title="山">山</button>
+        <button class="brush-btn" data-terrain="sea" title="海">海</button>
+      </div>
+      <select id="brush-size" class="brush-size-select">
+        <option value="1">1</option>
+        <option value="3">3</option>
+        <option value="5">5</option>
+        <option value="7">7</option>
+        <option value="11">11</option>
+        <option value="15">15</option>
+        <option value="21">21</option>
+        <option value="31">31</option>
+        <option value="51">51</option>
+      </select>
+      <div class="topbar-divider"></div>
+    </div>
+    <div class="topbar-right">
+      <div class="bgm-wrapper" id="bgm-wrapper">
+        <button class="btn-icon" id="btn-bgm" title="BGM">♪</button>
+        <div class="bgm-dropdown" id="bgm-dropdown">
+          <button id="bgm-play">▶ 再生</button>
+          <button id="bgm-stop">■ 停止</button>
+          <label>音量 <input type="range" id="bgm-volume" min="0" max="100" value="50"></label>
+        </div>
+      </div>
+      <button class="btn-icon" id="btn-settings" title="設定">⚙</button>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <!-- Left Panel -->
+    <div id="left-panel" class="left-panel">
+      <div class="panel-tabs">
+        <button class="tab-btn active" data-tab="territory">領地</button>
+        <button class="tab-btn" data-tab="player">プレイヤー</button>
+      </div>
+
+      <!-- Tree View -->
+      <div id="tree-view" class="tree-view">
+        <div id="territory-tab" class="tab-content active">
+          <button class="btn btn-small btn-primary" id="btn-new-territory">＋ 新しい領地</button>
+          <div class="hierarchy-selector">
+            <label>表示階層</label>
+            <select id="view-level">
+              <option value="0">帝国</option>
+              <option value="1">王国</option>
+              <option value="2">公爵</option>
+              <option value="3">侯爵</option>
+              <option value="4">伯爵</option>
+              <option value="5">子爵</option>
+              <option value="6">男爵</option>
+            </select>
+          </div>
+          <div id="territory-tree" class="tree"></div>
+        </div>
+        <div id="player-tab" class="tab-content">
+          <button class="btn btn-small btn-primary" id="btn-new-player">＋ 新しいプレイヤー</button>
+          <div id="player-list" class="player-list"></div>
+        </div>
+      </div>
+
+      <!-- Resize Bar -->
+      <div id="panel-divider" class="panel-divider">
+        <button class="divider-toggle" id="divider-toggle">▼</button>
+      </div>
+
+      <!-- Editor Panel -->
+      <div id="editor-panel" class="editor-panel">
+        <div id="editor-content" class="editor-content">
+          <p class="editor-placeholder">領地またはプレイヤーを選択してください</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Map Canvas -->
+    <div id="canvas-container" class="canvas-container">
+      <canvas id="canvas-terrain" class="map-canvas"></canvas>
+      <canvas id="canvas-overlay" class="map-canvas"></canvas>
+      <div class="canvas-hud">
+        <label class="toggle-label">
+          <input type="checkbox" id="toggle-labels"> 名前表示
+        </label>
+        <span id="zoom-display" class="zoom-display">100%</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div id="settings-modal" class="modal" hidden>
+  <div class="modal-content">
+    <h3>設定</h3>
+    <div class="form-group">
+      <label>SoundCloud プレイリストURL</label>
+      <input type="text" id="soundcloud-url" placeholder="https://soundcloud.com/...">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="settings-cancel">キャンセル</button>
+      <button class="btn btn-primary" id="settings-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Save Modal -->
+<div id="save-modal" class="modal" hidden>
+  <div class="modal-content">
+    <h3>セーブ</h3>
+    <div class="form-group">
+      <label>スロット名</label>
+      <input type="text" id="save-slot-name" placeholder="セーブデータ名">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="save-cancel">キャンセル</button>
+      <button class="btn btn-accent" id="save-export">JSONエクスポート</button>
+      <button class="btn btn-primary" id="save-confirm">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Color Picker Modal -->
+<div id="color-picker-modal" class="modal" hidden>
+  <div class="modal-content color-picker-content">
+    <h3>色を選択</h3>
+    <div id="color-grid" class="color-grid"></div>
+    <div class="color-picker-info">
+      <span id="color-name">-</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="color-cancel">キャンセル</button>
+      <button class="btn btn-primary" id="color-confirm">決定</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
