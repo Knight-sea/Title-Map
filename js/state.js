@@ -29,6 +29,8 @@ export function initState(width, height) {
       selectedPlayerId: null,
       viewLevel: 0,
       showLabels: false,
+      showCellBorders: false,
+      cellBordersWasOff: false, // track if we auto-turned it on
       creationSelectedCells: new Set(), // cellId strings for creation
       invasionTargetId: null,
       activeTab: 'territory',

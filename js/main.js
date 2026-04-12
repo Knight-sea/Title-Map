@@ -21,7 +21,7 @@ function showScreen(id) {
   document.getElementById(id).classList.add('active');
 }
 
-// ===== Slot =====
+// ===== Slots =====
 function buildSlots() {
   const g = document.getElementById('slot-grid'); g.innerHTML = '';
   for (let i = 0; i < 16; i++) {
@@ -40,13 +40,11 @@ function buildSlots() {
   }
 }
 
-// ===== Size =====
 function initSize() {
   const sel = document.getElementById('map-size-select');
   for (let s = 20; s <= 300; s += 20) {
     const o = document.createElement('option'); o.value = s; o.textContent = `${s} × ${s}`;
-    if (s === 100) o.selected = true;
-    sel.appendChild(o);
+    if (s === 100) o.selected = true; sel.appendChild(o);
   }
   const prev = document.getElementById('size-preview');
   sel.addEventListener('change', () => { const v = +sel.value; prev.textContent = `${v} × ${v} = ${(v*v).toLocaleString()} マス`; });
@@ -80,21 +78,23 @@ function startEditor() {
       window.addEventListener('state-changed', () => renderer.markDirty());
       window.addEventListener('mode-changed', () => {
         const s = getState();
-        if (s.ui.mode === 'invasion') showBanner('侵略: 左=追加/奪取 右=除外 Esc=終了', 'invasion');
+        if (s.ui.mode === 'invasion') {
+          showBanner('侵略: 左=追加/奪取 右=除外 Esc=終了', 'invasion');
+          autoCellBordersOn();
+        }
         renderer.markDirty();
       });
     }
-    updateLockUI();
+    updateLockUI(); syncCellBorderCheckbox();
     renderTree(); renderPlayerList(); renderEditor(); updateZoom();
     if (state.settings.soundcloudUrl) loadSoundCloud(state.settings.soundcloudUrl);
   });
 }
 
-// ===== Input =====
+// ===== Input: right-drag=pan, left=tool =====
 function initInput(canvas) {
   let panning = false, lx = 0, ly = 0;
-  let painting = false; // long-press continuous paint
-  let spaceDown = false;
+  let painting = false;
 
   canvas.addEventListener('mousedown', (e) => {
     const s = getState();
@@ -102,25 +102,41 @@ function initInput(canvas) {
     const mx = e.clientX - r.left, my = e.clientY - r.top;
     const cell = camera.screenToCell(mx, my);
 
+    // Right button = always pan
+    if (e.button === 2) {
+      e.preventDefault();
+      // Special: in creation mode, right click = deselect
+      if (s.ui.mode === 'creation') { creationRightClick(cell.x, cell.y); return; }
+      if (s.ui.mode === 'invasion') { doInvasion(cell.x, cell.y, 2); return; }
+      if (s.ui.mode === 'cell') { cellErase(cell.x, cell.y); painting = true; return; }
+      panning = true; lx = e.clientX; ly = e.clientY;
+      canvas.style.cursor = 'grabbing';
+      return;
+    }
+
+    // Middle button = pan
+    if (e.button === 1) {
+      e.preventDefault();
+      panning = true; lx = e.clientX; ly = e.clientY;
+      canvas.style.cursor = 'grabbing';
+      return;
+    }
+
+    // Left button = tool
     if (e.button === 0) {
       if (s.ui.mode === 'terrain') {
-        terrainPaint(cell.x, cell.y);
-        painting = true; // continuous paint on hold
+        terrainPaint(cell.x, cell.y); painting = true;
       } else if (s.ui.mode === 'cell') {
-        cellPaint(cell.x, cell.y);
-        painting = true;
+        cellPaint(cell.x, cell.y); painting = true;
       } else if (s.ui.mode === 'creation') {
         creationClick(cell.x, cell.y);
       } else if (s.ui.mode === 'invasion') {
         doInvasion(cell.x, cell.y, 0);
       } else {
+        // Normal mode: also pan with left
         panning = true; lx = e.clientX; ly = e.clientY;
+        canvas.style.cursor = 'grabbing';
       }
-    } else if (e.button === 2) {
-      e.preventDefault();
-      if (s.ui.mode === 'creation') creationRightClick(cell.x, cell.y);
-      else if (s.ui.mode === 'invasion') doInvasion(cell.x, cell.y, 2);
-      else if (s.ui.mode === 'cell') cellErase(cell.x, cell.y);
     }
   });
 
@@ -134,11 +150,18 @@ function initInput(canvas) {
       const cell = camera.screenToCell(e.clientX - r.left, e.clientY - r.top);
       const s = getState();
       if (s.ui.mode === 'terrain') terrainPaint(cell.x, cell.y);
-      else if (s.ui.mode === 'cell') cellPaint(cell.x, cell.y);
+      else if (s.ui.mode === 'cell') {
+        if (e.buttons === 1) cellPaint(cell.x, cell.y);
+        else if (e.buttons === 2) cellErase(cell.x, cell.y);
+      }
     }
   });
 
-  window.addEventListener('mouseup', () => { panning = false; painting = false; });
+  window.addEventListener('mouseup', (e) => {
+    panning = false; painting = false;
+    canvas.style.cursor = '';
+  });
+
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 
   canvas.addEventListener('wheel', (e) => {
@@ -151,14 +174,13 @@ function initInput(canvas) {
   window.addEventListener('keydown', (e) => {
     if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
     const s = getState();
-    if (e.key === ' ') { e.preventDefault(); spaceDown = true; }
     if (e.key === 'Escape') {
-      if (s.ui.mode === 'creation') { setUI({ mode: 'normal', creationSelectedCells: new Set() }); removeBanner(); renderer.markDirty(); }
-      else if (s.ui.mode === 'invasion') { setUI({ mode: 'normal', invasionTargetId: null }); removeBanner(); renderer.markDirty(); }
+      if (s.ui.mode === 'creation') { setUI({ mode:'normal', creationSelectedCells:new Set() }); removeBanner(); autoCellBordersRestore(); renderer.markDirty(); }
+      else if (s.ui.mode === 'invasion') { setUI({ mode:'normal', invasionTargetId:null }); removeBanner(); autoCellBordersRestore(); renderer.markDirty(); }
       else if (s.ui.mode === 'terrain') deselectBrush();
-      else if (s.ui.mode === 'cell') { setUI({ mode: 'normal', currentCellId: null }); removeBanner(); renderer.markDirty(); }
+      else if (s.ui.mode === 'cell') { setUI({ mode:'normal', currentCellId:null }); removeBanner(); renderer.markDirty(); document.getElementById('btn-cell-mode').classList.remove('active'); }
     }
-    const amt = 40;
+    const amt = 50;
     if (e.key === 'ArrowUp') { camera.pan(0, amt); renderer.markDirty(); }
     if (e.key === 'ArrowDown') { camera.pan(0, -amt); renderer.markDirty(); }
     if (e.key === 'ArrowLeft') { camera.pan(amt, 0); renderer.markDirty(); }
@@ -167,7 +189,6 @@ function initInput(canvas) {
     if (e.ctrlKey && e.key === '0') { e.preventDefault(); camera.fitMap(s.mapWidth, s.mapHeight, renderer.viewW, renderer.viewH); renderer.markDirty(); updateZoom(); }
     if (e.ctrlKey && e.key === 's') { e.preventDefault(); quickSave(); }
   });
-  window.addEventListener('keyup', (e) => { if (e.key === ' ') spaceDown = false; });
 }
 
 // ===== Terrain =====
@@ -178,7 +199,7 @@ function terrainPaint(cx, cy) {
   if (ch.length) { pushUndo({ changes: ch }); checkEnclaves(ch); renderer.markDirty(); }
 }
 
-// ===== Cell Painting =====
+// ===== Cell Paint =====
 function cellPaint(cx, cy) {
   const s = getState();
   if (s.locked) return;
@@ -186,9 +207,7 @@ function cellPaint(cx, cy) {
   const cellId = s.ui.currentCellId;
   if (!cellId) return;
   const cell = s.cells[cy][cx];
-  if (cell.cellId === cellId) return; // already this cell
-  // Don't paint on mountain/sea that isn't ownable? Actually cells can include anything
-  const prevCellId = cell.cellId;
+  if (cell.cellId === cellId) return;
   cell.cellId = cellId;
   renderer.markDirty();
 }
@@ -201,24 +220,94 @@ function cellErase(cx, cy) {
   renderer.markDirty();
 }
 
-function startNewCell() {
+function enterCellMode() {
   const s = getState();
   if (s.locked) return;
+  // Always start a new cell
   const id = generateId();
-  // Random color
   const color = { hue: Math.floor(Math.random() * 20), shade: Math.floor(Math.random() * 5) };
   s.cellRegions.set(id, { id, color });
-  setUI({ mode: 'cell', currentCellId: id });
-  showBanner('セル塗り: 左=塗る 右=消す Esc=終了', 'cell');
-  document.getElementById('btn-cell-paint').disabled = false;
+  setUI({ mode: 'cell', currentCellId: id, showCellBorders: true });
+  syncCellBorderCheckbox();
+  showBanner('セル塗り: 左=塗る 右=消す Esc=終了 (右クリック空きタイルで既存セル拾い)', 'cell');
+  document.getElementById('btn-cell-mode').classList.add('active');
   renderer.markDirty();
 }
 
-function resumeCellPaint() {
+// ===== Auto Cell Generation =====
+function autoGenerateCells() {
   const s = getState();
-  if (s.locked || !s.ui.currentCellId) return;
-  setUI({ mode: 'cell' });
-  showBanner('セル塗り: 左=塗る 右=消す Esc=終了', 'cell');
+  if (s.locked) return;
+  const size = +document.getElementById('auto-cell-size').value;
+  if (!confirm(`${size}×${size} でセルを自動生成します。平地/森/川のマスが対象です。既存セルは上書きされます。`)) return;
+
+  // Clear existing cells and regions
+  for (let y = 0; y < s.mapHeight; y++)
+    for (let x = 0; x < s.mapWidth; x++)
+      s.cells[y][x].cellId = null;
+  s.cellRegions.clear();
+
+  // Grid-based allocation
+  const w = s.mapWidth, h = s.mapHeight;
+  for (let gy = 0; gy < h; gy += size) {
+    for (let gx = 0; gx < w; gx += size) {
+      // Check if any ownable tile in this block
+      let hasOwnable = false;
+      for (let dy = 0; dy < size && gy + dy < h; dy++) {
+        for (let dx = 0; dx < size && gx + dx < w; dx++) {
+          if (TERRAINS[s.cells[gy+dy][gx+dx].terrain].canOwn) { hasOwnable = true; break; }
+        }
+        if (hasOwnable) break;
+      }
+      if (!hasOwnable) continue;
+
+      const id = generateId();
+      const color = { hue: Math.floor(Math.random() * 25), shade: Math.floor(Math.random() * 5) };
+      s.cellRegions.set(id, { id, color });
+
+      for (let dy = 0; dy < size && gy + dy < h; dy++) {
+        for (let dx = 0; dx < size && gx + dx < w; dx++) {
+          const cell = s.cells[gy+dy][gx+dx];
+          if (TERRAINS[cell.terrain].canOwn) {
+            cell.cellId = id;
+          }
+        }
+      }
+    }
+  }
+
+  // Now flood-fill: unassigned ownable tiles adjacent to a cell get absorbed
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const cell = s.cells[y][x];
+        if (cell.cellId || !TERRAINS[cell.terrain].canOwn) continue;
+        // Find adjacent cell
+        const neighbors = [[0,-1],[0,1],[-1,0],[1,0]];
+        for (const [dx,dy] of neighbors) {
+          const nx = x+dx, ny = y+dy;
+          if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+            const nCid = s.cells[ny][nx].cellId;
+            if (nCid) { cell.cellId = nCid; changed = true; break; }
+          }
+        }
+      }
+    }
+  }
+
+  // Clean up empty cellRegions (no tiles)
+  const usedIds = new Set();
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (s.cells[y][x].cellId) usedIds.add(s.cells[y][x].cellId);
+  for (const id of [...s.cellRegions.keys()]) {
+    if (!usedIds.has(id)) s.cellRegions.delete(id);
+  }
+
+  setUI({ showCellBorders: true });
+  syncCellBorderCheckbox();
   renderer.markDirty();
 }
 
@@ -226,63 +315,71 @@ function resumeCellPaint() {
 function toggleLock() {
   const s = getState();
   if (s.locked) {
-    // Unlock
-    if (!confirm('固定を解除しますか？領地データは保持されます。')) return;
+    if (!confirm('固定を解除しますか？')) return;
     s.locked = false;
   } else {
-    // Check all non-mountain/sea tiles have a cell
     let uncelled = 0;
-    for (let y = 0; y < s.mapHeight; y++) {
+    for (let y = 0; y < s.mapHeight; y++)
       for (let x = 0; x < s.mapWidth; x++) {
         const c = s.cells[y][x];
         if (!c.cellId && TERRAINS[c.terrain].canOwn) uncelled++;
       }
-    }
     if (uncelled > 0) {
-      if (!confirm(`${uncelled} マスがセル未割当です。未割当マスは領地にできません。固定しますか？`)) return;
+      if (!confirm(`${uncelled} マスがセル未割当です。固定しますか？`)) return;
     }
     s.locked = true;
-    // Exit any editing mode
     setUI({ mode: 'normal', selectedTerrain: null, currentCellId: null });
-    deselectBrush();
-    removeBanner();
+    deselectBrush(); removeBanner();
+    document.getElementById('btn-cell-mode').classList.remove('active');
   }
-  updateLockUI();
-  renderer.markDirty();
+  updateLockUI(); renderer.markDirty();
 }
 
 function updateLockUI() {
   const s = getState();
-  const lockBtn = document.getElementById('btn-lock');
-  const terrainGroup = document.getElementById('terrain-group');
-  const cellGroup = document.getElementById('cell-group');
+  const btn = document.getElementById('btn-lock');
+  const tg = document.getElementById('terrain-group');
+  const cg = document.getElementById('cell-group');
   if (s.locked) {
-    lockBtn.textContent = '🔓 固定中';
-    lockBtn.classList.add('locked');
-    terrainGroup.classList.add('hidden');
-    cellGroup.classList.add('hidden');
+    btn.textContent = '🔓 固定中'; btn.classList.add('locked');
+    tg.classList.add('hidden'); cg.classList.add('hidden');
   } else {
-    lockBtn.textContent = '🔒 固定';
-    lockBtn.classList.remove('locked');
-    terrainGroup.classList.remove('hidden');
-    cellGroup.classList.remove('hidden');
+    btn.textContent = '🔒 固定'; btn.classList.remove('locked');
+    tg.classList.remove('hidden'); cg.classList.remove('hidden');
   }
+}
+
+// ===== Cell border auto ON/OFF =====
+function autoCellBordersOn() {
+  const ui = getState().ui;
+  if (!ui.showCellBorders) {
+    setUI({ showCellBorders: true, cellBordersWasOff: true });
+    syncCellBorderCheckbox();
+  }
+}
+function autoCellBordersRestore() {
+  const ui = getState().ui;
+  if (ui.cellBordersWasOff) {
+    setUI({ showCellBorders: false, cellBordersWasOff: false });
+    syncCellBorderCheckbox();
+  }
+}
+function syncCellBorderCheckbox() {
+  document.getElementById('toggle-cell-borders').checked = getState().ui.showCellBorders;
 }
 
 // ===== Creation =====
 function creationClick(x, y) {
   const s = getState();
   if (s.locked) {
-    // Cell-based: toggle cellId
-    if (x < 0 || x >= s.mapWidth || y < 0 || y >= s.mapHeight) return;
+    if (x<0||x>=s.mapWidth||y<0||y>=s.mapHeight) return;
     const cellId = s.cells[y][x].cellId;
-    if (!cellId) return; // can't select uncelled tiles
+    if (!cellId) return;
     const sel = new Set(s.ui.creationSelectedCells);
     if (sel.has(cellId)) sel.delete(cellId); else sel.add(cellId);
     setUI({ creationSelectedCells: sel });
   } else {
-    // Tile-based
-    if (x < 0 || x >= s.mapWidth || y < 0 || y >= s.mapHeight) return;
+    if (x<0||x>=s.mapWidth||y<0||y>=s.mapHeight) return;
     const k = `${x},${y}`;
     const sel = new Set(s.ui.creationSelectedCells);
     if (sel.has(k)) sel.delete(k); else sel.add(k);
@@ -294,7 +391,7 @@ function creationClick(x, y) {
 function creationRightClick(x, y) {
   const s = getState();
   if (s.locked) {
-    if (x < 0 || x >= s.mapWidth || y < 0 || y >= s.mapHeight) return;
+    if (x<0||x>=s.mapWidth||y<0||y>=s.mapHeight) return;
     const cellId = s.cells[y][x].cellId;
     if (!cellId) return;
     const sel = new Set(s.ui.creationSelectedCells);
@@ -311,6 +408,7 @@ function creationRightClick(x, y) {
 
 function enterCreation() {
   setUI({ mode: 'creation', creationSelectedCells: new Set() });
+  autoCellBordersOn();
   const s = getState();
   const msg = s.locked ? '領地作成: 左=セル選択 右=解除 Esc=キャンセル' : '領地作成: 左=マス選択 右=解除 Esc=キャンセル';
   showBanner('', 'creation');
@@ -320,11 +418,10 @@ function enterCreation() {
     const btns = document.createElement('div');
     btns.style.cssText = 'margin-top:5px;display:flex;gap:6px;justify-content:center;pointer-events:auto';
     btns.innerHTML = '<button class="btn btn-small btn-primary" id="creation-confirm">作成</button><button class="btn btn-small btn-secondary" id="creation-cancel">キャンセル</button>';
-    banner.appendChild(btns);
-    banner.style.pointerEvents = 'auto';
+    banner.appendChild(btns); banner.style.pointerEvents = 'auto';
     document.getElementById('creation-confirm').onclick = confirmCreation;
     document.getElementById('creation-cancel').onclick = () => {
-      setUI({ mode: 'normal', creationSelectedCells: new Set() }); removeBanner(); renderer.markDirty();
+      setUI({ mode:'normal', creationSelectedCells:new Set() }); removeBanner(); autoCellBordersRestore(); renderer.markDirty();
     };
   }
   renderer.markDirty();
@@ -334,26 +431,18 @@ function confirmCreation() {
   const s = getState();
   const sel = s.ui.creationSelectedCells;
   if (!sel.size) { alert('選択してください'); return; }
-
-  // Build undo changes
   const changes = [];
   if (s.locked) {
-    for (const cellId of sel) {
-      for (let y = 0; y < s.mapHeight; y++)
-        for (let x = 0; x < s.mapWidth; x++)
-          if (s.cells[y][x].cellId === cellId) changes.push({ x, y, prevTerritoryId: s.cells[y][x].territoryId });
-    }
+    for (const cellId of sel)
+      for (let y=0;y<s.mapHeight;y++) for (let x=0;x<s.mapWidth;x++)
+        if (s.cells[y][x].cellId === cellId) changes.push({ x, y, prevTerritoryId: s.cells[y][x].territoryId });
   } else {
-    for (const k of sel) {
-      const [x, y] = k.split(',').map(Number);
-      changes.push({ x, y, prevTerritoryId: s.cells[y][x].territoryId });
-    }
+    for (const k of sel) { const [x,y] = k.split(',').map(Number); changes.push({ x, y, prevTerritoryId: s.cells[y][x].territoryId }); }
   }
-
   pushUndo({ territories: snapshotTerritories(), changes });
-  const t = createTerritory('', 6, null, { hue: Math.floor(Math.random() * 20), shade: 2 }, sel);
-  setUI({ mode: 'normal', creationSelectedCells: new Set(), selectedTerritoryId: t.id, activeTab: 'territory' });
-  removeBanner(); openEditorPanel();
+  const t = createTerritory('', 6, null, { hue: Math.floor(Math.random()*20), shade:2 }, sel);
+  setUI({ mode:'normal', creationSelectedCells:new Set(), selectedTerritoryId:t.id, activeTab:'territory' });
+  removeBanner(); autoCellBordersRestore(); openEditorPanel();
   renderTree(); renderEditor(); renderer.markDirty();
   setTimeout(() => { const el = document.getElementById('ed-name'); if (el) el.focus(); }, 60);
 }
@@ -376,16 +465,26 @@ function initToolbar() {
       if (getState().ui.selectedTerrain === t) { deselectBrush(); return; }
       document.querySelectorAll('.brush-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      setUI({ mode: 'terrain', selectedTerrain: t });
+      setUI({ mode:'terrain', selectedTerrain:t });
     };
   });
   document.getElementById('brush-size').onchange = (e) => setUI({ brushSize: +e.target.value });
   document.getElementById('btn-save').onclick = openSaveModal;
   document.getElementById('btn-undo').onclick = doUndo;
 
-  // Cell buttons
-  document.getElementById('btn-cell-new').onclick = startNewCell;
-  document.getElementById('btn-cell-paint').onclick = resumeCellPaint;
+  // Cell mode
+  document.getElementById('btn-cell-mode').onclick = () => {
+    const s = getState();
+    if (s.ui.mode === 'cell') {
+      setUI({ mode:'normal', currentCellId:null }); removeBanner(); renderer.markDirty();
+      document.getElementById('btn-cell-mode').classList.remove('active');
+    } else {
+      enterCellMode();
+    }
+  };
+
+  // Auto cell
+  document.getElementById('btn-auto-cell').onclick = autoGenerateCells;
 
   // Lock
   document.getElementById('btn-lock').onclick = toggleLock;
@@ -416,13 +515,14 @@ function initToolbar() {
 
   document.getElementById('btn-new-territory').onclick = enterCreation;
   document.getElementById('btn-new-player').onclick = () => {
-    const p = createPlayer('新しいプレイヤー', '', { hue: Math.floor(Math.random() * 20), shade: 2 }, '');
-    setUI({ selectedPlayerId: p.id, selectedTerritoryId: null, activeTab: 'player' });
+    const p = createPlayer('新しいプレイヤー', '', { hue: Math.floor(Math.random()*20), shade:2 }, '');
+    setUI({ selectedPlayerId:p.id, selectedTerritoryId:null, activeTab:'player' });
     renderPlayerList(); renderEditor(); openEditorPanel();
   };
 
   document.getElementById('view-level').onchange = (e) => { setUI({ viewLevel: +e.target.value }); renderer.markDirty(); };
   document.getElementById('toggle-labels').onchange = (e) => { setUI({ showLabels: e.target.checked }); renderer.markDirty(); };
+  document.getElementById('toggle-cell-borders').onchange = (e) => { setUI({ showCellBorders: e.target.checked }); renderer.markDirty(); };
 
   // Save modal
   document.getElementById('save-cancel').onclick = () => document.getElementById('save-modal').hidden = true;
@@ -443,7 +543,7 @@ function initToolbar() {
 
 function deselectBrush() {
   document.querySelectorAll('.brush-btn').forEach(b => b.classList.remove('active'));
-  setUI({ mode: 'normal', selectedTerrain: null });
+  setUI({ mode:'normal', selectedTerrain:null });
 }
 
 // ===== Panel =====
@@ -462,12 +562,7 @@ function openEditorPanel() {
 }
 
 // ===== Helpers =====
-function showBanner(text, cls) {
-  removeBanner();
-  const b = document.createElement('div'); b.className = `mode-banner ${cls||''}`;
-  b.textContent = text;
-  document.getElementById('canvas-container').appendChild(b);
-}
+function showBanner(text, cls) { removeBanner(); const b = document.createElement('div'); b.className = `mode-banner ${cls||''}`; b.textContent = text; document.getElementById('canvas-container').appendChild(b); }
 function removeBanner() { document.querySelectorAll('.mode-banner').forEach(b => b.remove()); }
 function updateZoom() { const el = document.getElementById('zoom-display'); if (el && camera) el.textContent = Math.round(camera.zoom * 100) + '%'; }
 function quickSave() { saveToSlot(getState().currentSlot); }

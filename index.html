@@ -7,7 +7,6 @@
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<!-- Slot Screen -->
 <div id="slot-screen" class="screen active">
   <div class="slot-container">
     <h1 class="slot-title">領土マップエディター</h1>
@@ -19,14 +18,10 @@
   </div>
 </div>
 
-<!-- Size Screen -->
 <div id="size-screen" class="screen">
   <div class="size-container">
     <h2>マップサイズ選択</h2>
-    <div class="size-select-row">
-      <label>幅 × 高さ</label>
-      <select id="map-size-select"></select>
-    </div>
+    <div class="size-select-row"><label>幅 × 高さ</label><select id="map-size-select"></select></div>
     <div id="size-preview" class="size-preview"></div>
     <div class="size-actions">
       <button class="btn btn-secondary" id="size-back">戻る</button>
@@ -35,9 +30,7 @@
   </div>
 </div>
 
-<!-- Editor Screen -->
 <div id="editor-screen" class="screen">
-  <!-- Top Bar -->
   <div class="topbar">
     <div class="topbar-left">
       <span class="topbar-logo">領土マップ</span>
@@ -45,8 +38,8 @@
       <button class="btn-icon" id="btn-undo" title="Ctrl+Z">↩</button>
       <div class="topbar-divider"></div>
 
-      <!-- Terrain brushes (hidden when locked) -->
-      <div class="terrain-group" id="terrain-group">
+      <!-- Terrain (hidden when locked) -->
+      <div class="tool-group" id="terrain-group">
         <div class="terrain-brushes">
           <button class="brush-btn" data-terrain="plain">平地</button>
           <button class="brush-btn" data-terrain="forest">森</button>
@@ -62,18 +55,25 @@
         <div class="topbar-divider"></div>
       </div>
 
-      <!-- Cell painting (hidden when locked) -->
-      <div class="cell-group" id="cell-group">
-        <button class="btn-tool" id="btn-cell-new" title="新しいセルを塗る">＋セル</button>
-        <button class="btn-tool" id="btn-cell-paint" title="選択中セルを塗り足す" disabled>セル塗り</button>
+      <!-- Cell tools (hidden when locked) -->
+      <div class="tool-group" id="cell-group">
+        <button class="btn-tool" id="btn-cell-mode" title="セル塗り">セル塗り</button>
+        <div class="topbar-divider"></div>
+        <label class="toolbar-label">自動セル</label>
+        <select id="auto-cell-size" class="toolbar-select">
+          <option value="3">3×3</option><option value="4">4×4</option><option value="5" selected>5×5</option>
+          <option value="7">7×7</option><option value="10">10×10</option><option value="15">15×15</option>
+          <option value="20">20×20</option>
+        </select>
+        <button class="btn-tool" id="btn-auto-cell">自動生成</button>
         <div class="topbar-divider"></div>
       </div>
 
-      <!-- Lock button -->
-      <button class="btn-tool" id="btn-lock" title="地形とセルを固定">🔓 固定</button>
+      <!-- Lock -->
+      <button class="btn-tool" id="btn-lock">🔒 固定</button>
       <div class="topbar-divider"></div>
 
-      <!-- View level (always visible) -->
+      <!-- Hierarchy (always) -->
       <label class="toolbar-label">階層</label>
       <select id="view-level" class="toolbar-select">
         <option value="0">帝国</option><option value="1">王国</option>
@@ -95,9 +95,7 @@
     </div>
   </div>
 
-  <!-- Main -->
   <div class="main-content">
-    <!-- Left Panel -->
     <div class="left-panel">
       <div class="left-top">
         <div class="panel-tabs">
@@ -115,9 +113,7 @@
           </div>
         </div>
       </div>
-      <div class="panel-divider">
-        <button class="divider-toggle" id="divider-toggle">▲ 編集パネル</button>
-      </div>
+      <div class="panel-divider"><button class="divider-toggle" id="divider-toggle">▲ 編集パネル</button></div>
       <div id="editor-panel" class="editor-panel collapsed">
         <div id="editor-content" class="editor-content">
           <p class="editor-placeholder">領地またはプレイヤーを選択</p>
@@ -125,11 +121,11 @@
       </div>
     </div>
 
-    <!-- Map -->
     <div id="canvas-container" class="canvas-container">
       <canvas id="map-canvas"></canvas>
       <div class="canvas-hud">
         <label class="toggle-label"><input type="checkbox" id="toggle-labels"> 名前</label>
+        <label class="toggle-label"><input type="checkbox" id="toggle-cell-borders"> セル線</label>
         <span id="zoom-display" class="zoom-display">100%</span>
       </div>
     </div>
@@ -154,18 +150,9 @@
 <div id="color-picker-modal" class="modal" hidden>
   <div class="modal-content color-picker-content">
     <h3>色を選択</h3>
-    <div class="cp-step">
-      <div class="cp-label">色相</div>
-      <div id="cp-hues" class="cp-hues"></div>
-    </div>
-    <div class="cp-step">
-      <div class="cp-label">明暗</div>
-      <div id="cp-shades" class="cp-shades"></div>
-    </div>
-    <div class="cp-preview-row">
-      <div id="cp-preview" class="cp-preview"></div>
-      <span id="cp-name" class="cp-name">-</span>
-    </div>
+    <div class="cp-step"><div class="cp-label">色相</div><div id="cp-hues" class="cp-hues"></div></div>
+    <div class="cp-step"><div class="cp-label">明暗</div><div id="cp-shades" class="cp-shades"></div></div>
+    <div class="cp-preview-row"><div id="cp-preview" class="cp-preview"></div><span id="cp-name" class="cp-name">-</span></div>
     <div class="modal-actions"><button class="btn btn-secondary" id="color-cancel">キャンセル</button><button class="btn btn-primary" id="color-confirm">決定</button></div>
   </div>
 </div>
