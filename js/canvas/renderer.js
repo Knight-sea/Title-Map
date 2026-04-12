@@ -3,41 +3,42 @@ import { getState } from '../state.js';
 import { getDisplayColor, findBorderRank } from '../territory/hierarchy.js';
 
 export class Renderer {
-  constructor(terrainCanvas, overlayCanvas, camera) {
-    this.tCtx = terrainCanvas.getContext('2d');
-    this.oCtx = overlayCanvas.getContext('2d');
-    this.tCanvas = terrainCanvas;
-    this.oCanvas = overlayCanvas;
+  constructor(canvas, camera) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
     this.camera = camera;
-    this.dirty = true;
     this._raf = null;
     this._running = false;
+    this._needsRender = true;
   }
 
   resize() {
-    const container = this.tCanvas.parentElement;
+    const container = this.canvas.parentElement;
+    if (!container) return;
     const w = container.clientWidth;
     const h = container.clientHeight;
+    if (w === 0 || h === 0) return;
     const dpr = window.devicePixelRatio || 1;
-    for (const c of [this.tCanvas, this.oCanvas]) {
-      c.width = w * dpr;
-      c.height = h * dpr;
-      c.style.width = w + 'px';
-      c.style.height = h + 'px';
-    }
-    this.width = w * dpr;
-    this.height = h * dpr;
+    this.canvas.width = w * dpr;
+    this.canvas.height = h * dpr;
+    this.canvas.style.width = w + 'px';
+    this.canvas.style.height = h + 'px';
+    this.viewW = w;
+    this.viewH = h;
     this.dpr = dpr;
-    this.dirty = true;
+    this._needsRender = true;
   }
 
-  markDirty() { this.dirty = true; }
+  markDirty() { this._needsRender = true; }
 
   start() {
     this._running = true;
     const loop = () => {
       if (!this._running) return;
-      this.render();
+      if (this._needsRender) {
+        this._needsRender = false;
+        this._render();
+      }
       this._raf = requestAnimationFrame(loop);
     };
     loop();
@@ -48,207 +49,166 @@ export class Renderer {
     if (this._raf) cancelAnimationFrame(this._raf);
   }
 
-  render() {
+  _render() {
     const state = getState();
     if (!state) return;
 
-    const ctx = this.tCtx;
-    const oCtx = this.oCtx;
+    const ctx = this.ctx;
     const cam = this.camera;
     const dpr = this.dpr;
-    const cw = this.width;
-    const ch = this.height;
+    const vw = this.viewW;
+    const vh = this.viewH;
 
-    // Clear both layers
-    ctx.clearRect(0, 0, cw, ch);
-    oCtx.clearRect(0, 0, cw, ch);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, vw, vh);
 
-    ctx.save();
-    oCtx.save();
-    ctx.scale(dpr, dpr);
-    oCtx.scale(dpr, dpr);
-
-    const viewW = cw / dpr;
-    const viewH = ch / dpr;
-    const range = cam.getVisibleRange(viewW, viewH, state.mapWidth, state.mapHeight);
+    const range = cam.getVisibleRange(vw, vh, state.mapWidth, state.mapHeight);
     const scale = cam.scale;
     const ui = state.ui;
 
-    // Draw cells
+    // ---- Draw cells ----
     for (let y = range.y0; y <= range.y1; y++) {
       for (let x = range.x0; x <= range.x1; x++) {
         const cell = state.cells[y][x];
         const sx = (x - cam.x) * scale;
         const sy = (y - cam.y) * scale;
-        const sw = scale;
-        const sh = scale;
 
-        // Territory color or terrain color
+        // Base color: territory or terrain
         let color;
         if (cell.territoryId) {
           color = getDisplayColor(cell.territoryId, ui.viewLevel);
         } else {
-          color = UNASSIGNED_COLOR;
+          // No territory: show terrain color directly
+          color = TERRAINS[cell.terrain].color;
         }
         ctx.fillStyle = color;
-        ctx.fillRect(sx, sy, sw + 0.5, sh + 0.5);
+        ctx.fillRect(sx, sy, scale + 0.5, scale + 0.5);
 
-        // Terrain overlay (for non-plain)
-        const terrain = TERRAINS[cell.terrain];
-        if (cell.terrain !== 'plain') {
-          if (!cell.territoryId) {
-            ctx.fillStyle = terrain.color;
-            ctx.fillRect(sx, sy, sw + 0.5, sh + 0.5);
-          } else {
-            // Slight terrain tint overlay
-            ctx.fillStyle = terrain.color;
-            ctx.globalAlpha = 0.3;
-            ctx.fillRect(sx, sy, sw + 0.5, sh + 0.5);
-            ctx.globalAlpha = 1;
-          }
-          // Symbol if zoomed in enough
-          if (terrain.symbol && scale > 14) {
-            ctx.fillStyle = 'rgba(255,255,255,0.5)';
-            ctx.font = `${Math.min(scale * 0.5, 14)}px sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(terrain.symbol, sx + sw / 2, sy + sh / 2);
-          }
+        // Terrain tint on top of territory color
+        if (cell.territoryId && cell.terrain !== 'plain') {
+          ctx.globalAlpha = 0.25;
+          ctx.fillStyle = TERRAINS[cell.terrain].color;
+          ctx.fillRect(sx, sy, scale + 0.5, scale + 0.5);
+          ctx.globalAlpha = 1;
         }
 
-        // Grid lines (only if zoomed in)
-        if (scale > 6) {
-          ctx.strokeStyle = GRID_COLOR;
-          ctx.lineWidth = 0.5;
-          ctx.strokeRect(sx, sy, sw, sh);
+        // Terrain symbol when zoomed in
+        if (cell.terrain !== 'plain' && TERRAINS[cell.terrain].symbol && scale > 16) {
+          ctx.fillStyle = 'rgba(255,255,255,0.45)';
+          ctx.font = `${Math.min(scale * 0.45, 13)}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(TERRAINS[cell.terrain].symbol, sx + scale / 2, sy + scale / 2);
         }
       }
     }
 
-    // Draw borders on overlay
-    this._drawBorders(oCtx, state, range, viewW, viewH);
+    // ---- Grid lines ----
+    if (scale > 8) {
+      ctx.strokeStyle = GRID_COLOR;
+      ctx.lineWidth = 0.5;
+      for (let y = range.y0; y <= range.y1 + 1; y++) {
+        const sy = (y - cam.y) * scale;
+        const sx0 = (range.x0 - cam.x) * scale;
+        const sx1 = (range.x1 + 1 - cam.x) * scale;
+        ctx.beginPath(); ctx.moveTo(sx0, sy); ctx.lineTo(sx1, sy); ctx.stroke();
+      }
+      for (let x = range.x0; x <= range.x1 + 1; x++) {
+        const sx = (x - cam.x) * scale;
+        const sy0 = (range.y0 - cam.y) * scale;
+        const sy1 = (range.y1 + 1 - cam.y) * scale;
+        ctx.beginPath(); ctx.moveTo(sx, sy0); ctx.lineTo(sx, sy1); ctx.stroke();
+      }
+    }
 
-    // Draw selection highlights
+    // ---- Territory borders ----
+    this._drawBorders(ctx, state, range, scale);
+
+    // ---- Selection highlights ----
     if (ui.mode === 'creation') {
-      this._drawCreationHighlight(oCtx, state, range);
-    } else if (ui.mode === 'invasion') {
-      this._drawInvasionHighlight(oCtx, state, range);
+      for (const key of ui.creationSelectedCells) {
+        const [cx, cy] = key.split(',').map(Number);
+        if (cx < range.x0 || cx > range.x1 || cy < range.y0 || cy > range.y1) continue;
+        const sx = (cx - cam.x) * scale;
+        const sy = (cy - cam.y) * scale;
+        ctx.fillStyle = 'rgba(60,140,255,0.25)';
+        ctx.fillRect(sx, sy, scale, scale);
+        ctx.strokeStyle = 'rgba(60,140,255,0.8)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx + 1, sy + 1, scale - 2, scale - 2);
+      }
     }
 
-    // Draw labels
-    if (ui.showLabels && scale > 8) {
-      this._drawLabels(oCtx, state, range);
+    if (ui.mode === 'invasion') {
+      const targetId = ui.invasionTargetId;
+      for (let y = range.y0; y <= range.y1; y++) {
+        for (let x = range.x0; x <= range.x1; x++) {
+          const cell = state.cells[y][x];
+          const sx = (x - cam.x) * scale;
+          const sy = (y - cam.y) * scale;
+          if (!TERRAINS[cell.terrain].canOwn) {
+            ctx.fillStyle = 'rgba(100,100,100,0.35)';
+            ctx.fillRect(sx, sy, scale, scale);
+          } else if (cell.territoryId === targetId) {
+            ctx.strokeStyle = 'rgba(255,80,80,0.5)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(sx + 1, sy + 1, scale - 2, scale - 2);
+          } else {
+            ctx.strokeStyle = 'rgba(80,255,80,0.3)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(sx + 1, sy + 1, scale - 2, scale - 2);
+          }
+        }
+      }
     }
 
-    ctx.restore();
-    oCtx.restore();
+    // ---- Labels ----
+    if (ui.showLabels && scale > 10) {
+      this._drawLabels(ctx, state, range, scale);
+    }
   }
 
-  _drawBorders(ctx, state, range) {
+  _drawBorders(ctx, state, range, scale) {
     const cam = this.camera;
-    const scale = cam.scale;
-
     for (let y = range.y0; y <= range.y1; y++) {
       for (let x = range.x0; x <= range.x1; x++) {
-        const cell = state.cells[y][x];
-        if (!cell.territoryId) continue;
+        const tid = state.cells[y][x].territoryId;
+        if (!tid) continue;
 
         const sx = (x - cam.x) * scale;
         const sy = (y - cam.y) * scale;
 
-        // Check each neighbor
-        const neighbors = [
-          [x, y - 1, sx, sy, scale, 0],             // top: horizontal line at top
-          [x, y + 1, sx, sy + scale, scale, 0],     // bottom
-          [x - 1, y, sx, sy, 0, scale],              // left: vertical line at left
-          [x + 1, y, sx + scale, sy, 0, scale],      // right
+        const dirs = [
+          [0, -1, sx, sy, sx + scale, sy],         // top
+          [0, 1, sx, sy + scale, sx + scale, sy + scale], // bottom
+          [-1, 0, sx, sy, sx, sy + scale],          // left
+          [1, 0, sx + scale, sy, sx + scale, sy + scale], // right
         ];
 
-        for (const [nx, ny, lx, ly, lw, lh] of neighbors) {
-          const neighborTid = (nx >= 0 && nx < state.mapWidth && ny >= 0 && ny < state.mapHeight)
-            ? state.cells[ny][nx].territoryId
-            : null;
+        for (const [dx, dy, x1, y1, x2, y2] of dirs) {
+          const nx = x + dx, ny = y + dy;
+          const nTid = (nx >= 0 && nx < state.mapWidth && ny >= 0 && ny < state.mapHeight)
+            ? state.cells[ny][nx].territoryId : null;
+          if (nTid === tid) continue;
 
-          if (neighborTid === cell.territoryId) continue;
+          const rank = findBorderRank(tid, nTid, state);
+          if (rank < 0) continue;
+          if (cam.zoom < BORDER_ZOOM_THRESHOLDS[rank]) continue;
 
-          // Find highest rank at which these two cells differ
-          const borderRank = findBorderRank(cell.territoryId, neighborTid, state);
-          if (borderRank < 0) continue;
-
-          // Check zoom threshold
-          if (cam.zoom < BORDER_ZOOM_THRESHOLDS[borderRank]) continue;
-
-          const rankDef = RANKS[borderRank];
-          ctx.strokeStyle = rankDef.borderColor;
-          ctx.lineWidth = rankDef.borderWidth;
+          const rd = RANKS[rank];
+          ctx.strokeStyle = rd.borderColor;
+          ctx.lineWidth = rd.borderWidth;
           ctx.beginPath();
-          if (lw > 0) {
-            ctx.moveTo(lx, ly);
-            ctx.lineTo(lx + lw, ly + lh);
-          } else {
-            ctx.moveTo(lx, ly);
-            ctx.lineTo(lx + lw, ly + lh);
-          }
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
           ctx.stroke();
         }
       }
     }
   }
 
-  _drawCreationHighlight(ctx, state, range) {
+  _drawLabels(ctx, state, range, scale) {
     const cam = this.camera;
-    const scale = cam.scale;
-    const selected = state.ui.creationSelectedCells;
-
-    for (const key of selected) {
-      const [x, y] = key.split(',').map(Number);
-      if (x < range.x0 || x > range.x1 || y < range.y0 || y > range.y1) continue;
-      const sx = (x - cam.x) * scale;
-      const sy = (y - cam.y) * scale;
-      ctx.fillStyle = 'rgba(60,140,255,0.25)';
-      ctx.fillRect(sx, sy, scale, scale);
-      ctx.strokeStyle = 'rgba(60,140,255,0.8)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(sx + 1, sy + 1, scale - 2, scale - 2);
-    }
-  }
-
-  _drawInvasionHighlight(ctx, state, range) {
-    const cam = this.camera;
-    const scale = cam.scale;
-    const targetId = state.ui.invasionTargetId;
-
-    for (let y = range.y0; y <= range.y1; y++) {
-      for (let x = range.x0; x <= range.x1; x++) {
-        const cell = state.cells[y][x];
-        const sx = (x - cam.x) * scale;
-        const sy = (y - cam.y) * scale;
-        const terrain = TERRAINS[cell.terrain];
-
-        if (!terrain.canOwn) {
-          // Mountain/sea - grayed out
-          ctx.fillStyle = 'rgba(100,100,100,0.4)';
-          ctx.fillRect(sx, sy, scale, scale);
-        } else if (cell.territoryId === targetId) {
-          // Own territory - red border (removable)
-          ctx.strokeStyle = 'rgba(255,80,80,0.6)';
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(sx + 1, sy + 1, scale - 2, scale - 2);
-        } else {
-          // Available to add - green border
-          ctx.strokeStyle = 'rgba(80,255,80,0.4)';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(sx + 1, sy + 1, scale - 2, scale - 2);
-        }
-      }
-    }
-  }
-
-  _drawLabels(ctx, state, range) {
-    const cam = this.camera;
-    const scale = cam.scale;
-
-    // Collect territory bounding boxes in view
     const bounds = new Map();
     for (let y = range.y0; y <= range.y1; y++) {
       for (let x = range.x0; x <= range.x1; x++) {
@@ -262,19 +222,16 @@ export class Renderer {
         if (y > b.maxY) b.maxY = y;
       }
     }
-
+    const fs = Math.max(7, Math.min(13, scale * 0.35));
+    ctx.font = `bold ${fs}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const fontSize = Math.max(8, Math.min(14, scale * 0.4));
-    ctx.font = `bold ${fontSize}px sans-serif`;
-
     for (const [tid, b] of bounds) {
       const t = state.territories.get(tid);
       if (!t || !t.name) continue;
       const cx = ((b.minX + b.maxX + 1) / 2 - cam.x) * scale;
       const cy = ((b.minY + b.maxY + 1) / 2 - cam.y) * scale;
-      // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
       ctx.fillText(t.name, cx + 1, cy + 1);
       ctx.fillStyle = '#fff';
       ctx.fillText(t.name, cx, cy);

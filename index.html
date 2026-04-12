@@ -40,14 +40,13 @@
 
 <!-- Main Editor Screen -->
 <div id="editor-screen" class="screen">
-  <!-- Top Bar -->
   <div id="topbar" class="topbar">
     <div class="topbar-left">
       <span class="topbar-logo">領土マップ</span>
       <button class="btn-icon" id="btn-save" title="セーブ (Ctrl+S)">💾</button>
       <button class="btn-icon" id="btn-undo" title="元に戻す (Ctrl+Z)">↩</button>
       <div class="topbar-divider"></div>
-      <div class="terrain-brushes" id="terrain-brushes">
+      <div class="terrain-brushes">
         <button class="brush-btn" data-terrain="plain" title="平地">平地</button>
         <button class="brush-btn" data-terrain="forest" title="森">森</button>
         <button class="brush-btn" data-terrain="river" title="川">川</button>
@@ -55,20 +54,14 @@
         <button class="brush-btn" data-terrain="sea" title="海">海</button>
       </div>
       <select id="brush-size" class="brush-size-select">
-        <option value="1">1</option>
-        <option value="3">3</option>
-        <option value="5">5</option>
-        <option value="7">7</option>
-        <option value="11">11</option>
-        <option value="15">15</option>
-        <option value="21">21</option>
-        <option value="31">31</option>
-        <option value="51">51</option>
+        <option value="1">1</option><option value="3">3</option><option value="5">5</option>
+        <option value="7">7</option><option value="11">11</option><option value="15">15</option>
+        <option value="21">21</option><option value="31">31</option><option value="51">51</option>
       </select>
       <div class="topbar-divider"></div>
     </div>
     <div class="topbar-right">
-      <div class="bgm-wrapper" id="bgm-wrapper">
+      <div class="bgm-wrapper">
         <button class="btn-icon" id="btn-bgm" title="BGM">♪</button>
         <div class="bgm-dropdown" id="bgm-dropdown">
           <button id="bgm-play">▶ 再生</button>
@@ -80,67 +73,56 @@
     </div>
   </div>
 
-  <!-- Main Content -->
   <div class="main-content">
     <!-- Left Panel -->
     <div id="left-panel" class="left-panel">
-      <div class="panel-tabs">
-        <button class="tab-btn active" data-tab="territory">領地</button>
-        <button class="tab-btn" data-tab="player">プレイヤー</button>
-      </div>
-
-      <!-- Tree View -->
-      <div id="tree-view" class="tree-view">
-        <div id="territory-tab" class="tab-content active">
-          <button class="btn btn-small btn-primary" id="btn-new-territory">＋ 新しい領地</button>
-          <div class="hierarchy-selector">
-            <label>表示階層</label>
-            <select id="view-level">
-              <option value="0">帝国</option>
-              <option value="1">王国</option>
-              <option value="2">公爵</option>
-              <option value="3">侯爵</option>
-              <option value="4">伯爵</option>
-              <option value="5">子爵</option>
-              <option value="6">男爵</option>
-            </select>
+      <div class="left-top">
+        <div class="panel-tabs">
+          <button class="tab-btn active" data-tab="territory">領地</button>
+          <button class="tab-btn" data-tab="player">プレイヤー</button>
+        </div>
+        <div id="tree-view" class="tree-view">
+          <div id="territory-tab" class="tab-content active">
+            <button class="btn btn-small btn-primary" id="btn-new-territory">＋ 新しい領地</button>
+            <div class="hierarchy-selector">
+              <label>表示階層</label>
+              <select id="view-level">
+                <option value="0">帝国</option><option value="1">王国</option>
+                <option value="2">公爵</option><option value="3">侯爵</option>
+                <option value="4">伯爵</option><option value="5">子爵</option>
+                <option value="6">男爵</option>
+              </select>
+            </div>
+            <div id="territory-tree" class="tree"></div>
           </div>
-          <div id="territory-tree" class="tree"></div>
-        </div>
-        <div id="player-tab" class="tab-content">
-          <button class="btn btn-small btn-primary" id="btn-new-player">＋ 新しいプレイヤー</button>
-          <div id="player-list" class="player-list"></div>
+          <div id="player-tab" class="tab-content">
+            <button class="btn btn-small btn-primary" id="btn-new-player">＋ 新しいプレイヤー</button>
+            <div id="player-list" class="player-list"></div>
+          </div>
         </div>
       </div>
-
-      <!-- Resize Bar -->
-      <div id="panel-divider" class="panel-divider">
-        <button class="divider-toggle" id="divider-toggle">▼</button>
+      <div class="panel-divider" id="panel-divider">
+        <button class="divider-toggle" id="divider-toggle">▲ 編集パネル</button>
       </div>
-
-      <!-- Editor Panel -->
-      <div id="editor-panel" class="editor-panel">
+      <div id="editor-panel" class="editor-panel collapsed">
         <div id="editor-content" class="editor-content">
-          <p class="editor-placeholder">領地またはプレイヤーを選択してください</p>
+          <p class="editor-placeholder">領地またはプレイヤーを選択</p>
         </div>
       </div>
     </div>
 
-    <!-- Map Canvas -->
+    <!-- Map -->
     <div id="canvas-container" class="canvas-container">
-      <canvas id="canvas-terrain" class="map-canvas"></canvas>
-      <canvas id="canvas-overlay" class="map-canvas"></canvas>
+      <canvas id="map-canvas"></canvas>
       <div class="canvas-hud">
-        <label class="toggle-label">
-          <input type="checkbox" id="toggle-labels"> 名前表示
-        </label>
+        <label class="toggle-label"><input type="checkbox" id="toggle-labels"> 名前表示</label>
         <span id="zoom-display" class="zoom-display">100%</span>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Settings Modal -->
+<!-- Modals -->
 <div id="settings-modal" class="modal" hidden>
   <div class="modal-content">
     <h3>設定</h3>
@@ -154,8 +136,6 @@
     </div>
   </div>
 </div>
-
-<!-- Save Modal -->
 <div id="save-modal" class="modal" hidden>
   <div class="modal-content">
     <h3>セーブ</h3>
@@ -170,22 +150,17 @@
     </div>
   </div>
 </div>
-
-<!-- Color Picker Modal -->
 <div id="color-picker-modal" class="modal" hidden>
   <div class="modal-content color-picker-content">
     <h3>色を選択</h3>
     <div id="color-grid" class="color-grid"></div>
-    <div class="color-picker-info">
-      <span id="color-name">-</span>
-    </div>
+    <div class="color-picker-info"><span id="color-name">-</span></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" id="color-cancel">キャンセル</button>
       <button class="btn btn-primary" id="color-confirm">決定</button>
     </div>
   </div>
 </div>
-
 <script type="module" src="js/main.js"></script>
 </body>
 </html>
