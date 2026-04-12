@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+<!-- Slot Screen -->
 <div id="slot-screen" class="screen active">
   <div class="slot-container">
     <h1 class="slot-title">領土マップエディター</h1>
@@ -18,6 +19,7 @@
   </div>
 </div>
 
+<!-- Size Screen -->
 <div id="size-screen" class="screen">
   <div class="size-container">
     <h2>マップサイズ選択</h2>
@@ -25,86 +27,106 @@
     <div id="size-preview" class="size-preview"></div>
     <div class="size-actions">
       <button class="btn btn-secondary" id="size-back">戻る</button>
-      <button class="btn btn-primary" id="size-confirm">作成</button>
+      <button class="btn btn-primary" id="size-manual">手動で作成</button>
+      <button class="btn btn-accent" id="size-auto">自動生成</button>
     </div>
   </div>
 </div>
 
+<!-- Generation Screen -->
+<div id="gen-screen" class="screen">
+  <div class="gen-container">
+    <h2>マップ自動生成</h2>
+    <div class="gen-body">
+      <div class="gen-params">
+        <div class="form-group"><label>マップの形</label>
+          <select id="gen-shape"><option>大陸</option><option>群島</option><option>パンゲア</option><option>内海</option><option>大陸+島</option><option>フラクタル</option></select>
+        </div>
+        <div class="form-group"><label>海の割合 <span id="gen-sea-val">30%</span></label>
+          <input type="range" id="gen-sea" min="0" max="100" step="5" value="30">
+        </div>
+        <div class="form-group"><label>山の割合 <span id="gen-mtn-val">10%</span></label>
+          <input type="range" id="gen-mtn" min="0" max="100" step="5" value="10">
+        </div>
+        <div class="form-group"><label>森の密度</label>
+          <select id="gen-forest"><option>なし</option><option>小</option><option selected>中</option><option>大</option></select>
+        </div>
+        <div class="form-group"><label>川の量</label>
+          <select id="gen-river"><option>なし</option><option selected>小</option><option>中</option><option>大</option></select>
+        </div>
+        <div class="gen-seed-row">
+          <button class="btn btn-small btn-secondary" id="gen-reseed">🔄 再生成</button>
+        </div>
+      </div>
+      <div class="gen-preview-wrap">
+        <canvas id="gen-preview" width="200" height="200"></canvas>
+      </div>
+    </div>
+    <div class="gen-actions">
+      <button class="btn btn-secondary" id="gen-back">戻る</button>
+      <button class="btn btn-primary" id="gen-confirm">決定</button>
+    </div>
+  </div>
+</div>
+
+<!-- Editor Screen -->
 <div id="editor-screen" class="screen">
   <div class="topbar">
     <div class="topbar-left">
       <span class="topbar-logo">領土マップ</span>
-      <button class="btn-icon" id="btn-save" title="Ctrl+S">💾</button>
-      <button class="btn-icon" id="btn-undo" title="Ctrl+Z">↩</button>
+      <button class="btn-icon" id="btn-save" title="セーブ (Ctrl+S)">💾</button>
+      <button class="btn-icon" id="btn-undo" title="元に戻す (Ctrl+Z)">↩</button>
       <div class="topbar-divider"></div>
-
-      <!-- Terrain (hidden when locked) -->
       <div class="tool-group" id="terrain-group">
         <div class="terrain-brushes">
-          <button class="brush-btn" data-terrain="plain">平地</button>
-          <button class="brush-btn" data-terrain="forest">森</button>
-          <button class="brush-btn" data-terrain="river">川</button>
-          <button class="brush-btn" data-terrain="mountain">山</button>
-          <button class="brush-btn" data-terrain="sea">海</button>
+          <button class="brush-btn" data-terrain="plain" title="平地 (1)">平地</button>
+          <button class="brush-btn" data-terrain="forest" title="森 (2)">森</button>
+          <button class="brush-btn" data-terrain="river" title="川 (3)">川</button>
+          <button class="brush-btn" data-terrain="mountain" title="山 (4)">山</button>
+          <button class="brush-btn" data-terrain="sea" title="海 (5)">海</button>
         </div>
-        <select id="brush-size" class="brush-size-select">
-          <option value="1">1</option><option value="3">3</option><option value="5">5</option>
-          <option value="7">7</option><option value="11">11</option><option value="15">15</option>
-          <option value="21">21</option><option value="31">31</option><option value="51">51</option>
-        </select>
+        <select id="brush-size" class="brush-size-select" title="ブラシサイズ ([ / ])"></select>
         <div class="topbar-divider"></div>
       </div>
-
-      <!-- Cell tools (hidden when locked) -->
       <div class="tool-group" id="cell-group">
-        <button class="btn-tool" id="btn-cell-mode" title="セル塗り">セル塗り</button>
+        <button class="btn-tool" id="btn-cell-mode" title="セル塗り (C)">セル塗り</button>
         <div class="topbar-divider"></div>
         <label class="toolbar-label">自動セル</label>
         <select id="auto-cell-size" class="toolbar-select">
-          <option value="3">3×3</option><option value="4">4×4</option><option value="5" selected>5×5</option>
-          <option value="7">7×7</option><option value="10">10×10</option><option value="15">15×15</option>
-          <option value="20">20×20</option>
+          <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+          <option value="4">4</option><option value="5" selected>5</option><option value="7">7</option>
+          <option value="10">10</option><option value="15">15</option><option value="20">20</option>
         </select>
         <button class="btn-tool" id="btn-auto-cell">自動生成</button>
         <div class="topbar-divider"></div>
       </div>
-
-      <!-- Lock -->
-      <button class="btn-tool" id="btn-lock">🔒 固定</button>
+      <button class="btn-tool" id="btn-lock" title="固定 (L)">🔒 固定</button>
       <div class="topbar-divider"></div>
-
-      <!-- Hierarchy (always) -->
       <label class="toolbar-label">階層</label>
       <select id="view-level" class="toolbar-select">
-        <option value="0">帝国</option><option value="1">王国</option>
-        <option value="2">公爵</option><option value="3">侯爵</option>
-        <option value="4">伯爵</option><option value="5">子爵</option>
-        <option value="6">男爵</option>
+        <option value="0">帝国</option><option value="1">王国</option><option value="2">公爵</option>
+        <option value="3">侯爵</option><option value="4">伯爵</option><option value="5">子爵</option><option value="6">男爵</option>
       </select>
     </div>
     <div class="topbar-right">
       <div class="bgm-wrapper">
         <button class="btn-icon" id="btn-bgm">♪</button>
-        <div class="bgm-dropdown">
-          <button id="bgm-play">▶ 再生</button>
-          <button id="bgm-stop">■ 停止</button>
-          <label>音量 <input type="range" id="bgm-volume" min="0" max="100" value="50"></label>
-        </div>
+        <div class="bgm-dropdown"><button id="bgm-play">▶ 再生</button><button id="bgm-stop">■ 停止</button><label>音量<input type="range" id="bgm-volume" min="0" max="100" value="50"></label></div>
       </div>
-      <button class="btn-icon" id="btn-settings">⚙</button>
+      <button class="btn-icon" id="btn-settings" title="設定">⚙</button>
     </div>
   </div>
-
   <div class="main-content">
     <div class="left-panel">
       <div class="left-top">
         <div class="panel-tabs">
           <button class="tab-btn active" data-tab="territory">領地</button>
           <button class="tab-btn" data-tab="player">プレイヤー</button>
+          <button class="tab-btn tab-help" id="btn-help" title="ヘルプ">？</button>
         </div>
         <div class="tree-view">
           <div id="territory-tab" class="tab-content active">
-            <button class="btn btn-small btn-primary" id="btn-new-territory">＋ 新しい領地</button>
+            <button class="btn btn-small btn-primary" id="btn-new-territory" title="新しい領地 (N)">＋ 新しい領地</button>
             <div id="territory-tree" class="tree"></div>
           </div>
           <div id="player-tab" class="tab-content">
@@ -115,17 +137,15 @@
       </div>
       <div class="panel-divider"><button class="divider-toggle" id="divider-toggle">▲ 編集パネル</button></div>
       <div id="editor-panel" class="editor-panel collapsed">
-        <div id="editor-content" class="editor-content">
-          <p class="editor-placeholder">領地またはプレイヤーを選択</p>
-        </div>
+        <div id="editor-content" class="editor-content"><p class="editor-placeholder">領地またはプレイヤーを選択</p></div>
       </div>
     </div>
-
     <div id="canvas-container" class="canvas-container">
       <canvas id="map-canvas"></canvas>
       <div class="canvas-hud">
         <label class="toggle-label"><input type="checkbox" id="toggle-labels"> 名前</label>
         <label class="toggle-label"><input type="checkbox" id="toggle-cell-borders"> セル線</label>
+        <label class="toggle-label"><input type="checkbox" id="toggle-terrain-colors" checked> 地形色</label>
         <span id="zoom-display" class="zoom-display">100%</span>
       </div>
     </div>
@@ -134,28 +154,77 @@
 
 <!-- Modals -->
 <div id="settings-modal" class="modal" hidden>
-  <div class="modal-content">
-    <h3>設定</h3>
+  <div class="modal-content"><h3>設定</h3>
     <div class="form-group"><label>SoundCloud URL</label><input type="text" id="soundcloud-url" placeholder="https://soundcloud.com/..."></div>
     <div class="modal-actions"><button class="btn btn-secondary" id="settings-cancel">キャンセル</button><button class="btn btn-primary" id="settings-save">保存</button></div>
   </div>
 </div>
 <div id="save-modal" class="modal" hidden>
-  <div class="modal-content">
-    <h3>セーブ</h3>
+  <div class="modal-content"><h3>セーブ</h3>
     <div class="form-group"><label>スロット名</label><input type="text" id="save-slot-name"></div>
     <div class="modal-actions"><button class="btn btn-secondary" id="save-cancel">キャンセル</button><button class="btn btn-accent" id="save-export">JSON</button><button class="btn btn-primary" id="save-confirm">保存</button></div>
   </div>
 </div>
 <div id="color-picker-modal" class="modal" hidden>
-  <div class="modal-content color-picker-content">
-    <h3>色を選択</h3>
+  <div class="modal-content color-picker-content"><h3>色を選択</h3>
     <div class="cp-step"><div class="cp-label">色相</div><div id="cp-hues" class="cp-hues"></div></div>
     <div class="cp-step"><div class="cp-label">明暗</div><div id="cp-shades" class="cp-shades"></div></div>
     <div class="cp-preview-row"><div id="cp-preview" class="cp-preview"></div><span id="cp-name" class="cp-name">-</span></div>
     <div class="modal-actions"><button class="btn btn-secondary" id="color-cancel">キャンセル</button><button class="btn btn-primary" id="color-confirm">決定</button></div>
   </div>
 </div>
+
+<!-- Help Modal -->
+<div id="help-modal" class="modal" hidden>
+  <div class="modal-content help-content">
+    <h3>操作方法・ショートカット</h3>
+    <div class="help-section">
+      <h4>マップ操作</h4>
+      <table class="help-table">
+        <tr><td>右ドラッグ / 中ドラッグ</td><td>マップ移動</td></tr>
+        <tr><td>ホイール</td><td>ズーム（画面中央基準）</td></tr>
+        <tr><td>↑↓←→</td><td>スクロール</td></tr>
+        <tr><td>Ctrl + 0</td><td>全体表示</td></tr>
+      </table>
+    </div>
+    <div class="help-section">
+      <h4>ツール</h4>
+      <table class="help-table">
+        <tr><td>1 / 2 / 3 / 4 / 5</td><td>地形ブラシ（平地/森/川/山/海）</td></tr>
+        <tr><td>[ / ]</td><td>ブラシサイズ縮小/拡大</td></tr>
+        <tr><td>C</td><td>セル塗りモード ON/OFF</td></tr>
+        <tr><td>Space（セル塗り中）</td><td>現在のセルを確定 → 次のセル開始</td></tr>
+        <tr><td>L</td><td>地形+セルを固定/解除</td></tr>
+        <tr><td>T</td><td>地形色表示 ON/OFF</td></tr>
+        <tr><td>B</td><td>セル線表示 ON/OFF</td></tr>
+      </table>
+    </div>
+    <div class="help-section">
+      <h4>領地</h4>
+      <table class="help-table">
+        <tr><td>N</td><td>新しい領地の作成を開始</td></tr>
+        <tr><td>左クリック / ドラッグ（作成中）</td><td>セルを選択（スライドで複数選択可）</td></tr>
+        <tr><td>右クリック（作成中）</td><td>セルを選択解除</td></tr>
+        <tr><td>Enter（作成中）</td><td>領地を確定</td></tr>
+        <tr><td>Escape</td><td>現在のモードをキャンセル</td></tr>
+      </table>
+    </div>
+    <div class="help-section">
+      <h4>その他</h4>
+      <table class="help-table">
+        <tr><td>Ctrl + S</td><td>クイックセーブ</td></tr>
+        <tr><td>Ctrl + Z</td><td>元に戻す（最大10回）</td></tr>
+        <tr><td>Tab</td><td>領地/プレイヤー タブ切替</td></tr>
+      </table>
+    </div>
+    <div class="help-section">
+      <h4>ワークフロー</h4>
+      <p class="help-flow">① 地形を塗る → ② セルを塗る（または自動生成） → ③ 固定 → ④ 領地を作成（セル単位で選択） → ⑤ 階層・プレイヤーを設定</p>
+    </div>
+    <div class="modal-actions"><button class="btn btn-primary" id="help-close">閉じる</button></div>
+  </div>
+</div>
+
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

@@ -1,60 +1,13 @@
 import { getState, generateId } from '../state.js';
-
-/**
- * Create territory from selected cell IDs (after lock) or tile keys (before lock).
- * cellIds: Set of cellId strings
- */
-export function createTerritory(name, rank, parentId, color, cellIds) {
-  const state = getState();
-  const id = generateId();
-  const territory = {
-    id, name, rank,
-    parentId: parentId || null,
-    playerId: null,
-    color: color || { hue: 0, shade: 2 },
-    order: state.territories.size,
-  };
-  state.territories.set(id, territory);
-
-  // Assign all tiles belonging to these cellIds
-  if (state.locked) {
-    for (const cellId of cellIds) {
-      for (let y = 0; y < state.mapHeight; y++) {
-        for (let x = 0; x < state.mapWidth; x++) {
-          if (state.cells[y][x].cellId === cellId) {
-            state.cells[y][x].territoryId = id;
-          }
-        }
-      }
-    }
-  } else {
-    // Pre-lock: cellIds are "x,y" tile keys
-    for (const key of cellIds) {
-      const [x, y] = key.split(',').map(Number);
-      if (y >= 0 && y < state.mapHeight && x >= 0 && x < state.mapWidth) {
-        state.cells[y][x].territoryId = id;
-      }
-    }
-  }
-  return territory;
+export function createTerritory(name,rank,parentId,color,cellIds){
+  const s=getState(),id=generateId();
+  const t={id,name,rank,parentId:parentId||null,playerId:null,color:color||{hue:0,shade:2},order:s.territories.size};
+  s.territories.set(id,t);
+  // cellIds are cell region IDs (locked mode only)
+  for(const cid of cellIds)
+    for(let y=0;y<s.mapHeight;y++) for(let x=0;x<s.mapWidth;x++)
+      if(s.cells[y][x].cellId===cid) s.cells[y][x].territoryId=id;
+  return t;
 }
-
-export function updateTerritory(id, updates) {
-  const state = getState();
-  const t = state.territories.get(id);
-  if (!t) return;
-  Object.assign(t, updates);
-}
-
-export function deleteTerritory(id) {
-  const state = getState();
-  for (let y = 0; y < state.mapHeight; y++) {
-    for (let x = 0; x < state.mapWidth; x++) {
-      if (state.cells[y][x].territoryId === id) state.cells[y][x].territoryId = null;
-    }
-  }
-  for (const t of state.territories.values()) {
-    if (t.parentId === id) t.parentId = null;
-  }
-  state.territories.delete(id);
-}
+export function updateTerritory(id,u){const t=getState().territories.get(id);if(t)Object.assign(t,u);}
+export function deleteTerritory(id){const s=getState();for(let y=0;y<s.mapHeight;y++)for(let x=0;x<s.mapWidth;x++)if(s.cells[y][x].territoryId===id)s.cells[y][x].territoryId=null;for(const t of s.territories.values())if(t.parentId===id)t.parentId=null;s.territories.delete(id);}

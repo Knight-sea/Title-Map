@@ -1,29 +1,15 @@
 import { getState } from '../state.js';
 import { TERRAINS } from '../constants.js';
-
-/**
- * Paint terrain at cell (cx, cy) with given brush size.
- * Returns array of changed cells [{x, y, prevTerrain}] for undo.
- */
-export function paintTerrain(cx, cy, terrainType, brushSize) {
-  const state = getState();
-  const changes = [];
-  const radius = Math.floor(brushSize / 2);
-
-  for (let dy = -radius; dy <= radius; dy++) {
-    for (let dx = -radius; dx <= radius; dx++) {
-      const x = cx + dx;
-      const y = cy + dy;
-      if (x < 0 || x >= state.mapWidth || y < 0 || y >= state.mapHeight) continue;
-      const cell = state.cells[y][x];
-      if (cell.terrain !== terrainType) {
-        changes.push({ x, y, prevTerrain: cell.terrain, prevTerritoryId: cell.territoryId });
-        cell.terrain = terrainType;
-        // If painting mountain/sea, and cell was owned, might need to remove ownership
-        if (!TERRAINS[terrainType].canOwn && cell.territoryId) {
-          cell.territoryId = null;
-        }
-      }
+export function paintTerrain(cx,cy,type,brushSize){
+  const s=getState(),changes=[],r=Math.floor(brushSize/2);
+  for(let dy=-r;dy<=r;dy++) for(let dx=-r;dx<=r;dx++){
+    const x=cx+dx,y=cy+dy;
+    if(x<0||x>=s.mapWidth||y<0||y>=s.mapHeight)continue;
+    const c=s.cells[y][x];
+    if(c.terrain!==type){
+      changes.push({x,y,prevTerrain:c.terrain,prevTerritoryId:c.territoryId});
+      c.terrain=type;
+      if(!TERRAINS[type].canOwn&&c.territoryId)c.territoryId=null;
     }
   }
   return changes;

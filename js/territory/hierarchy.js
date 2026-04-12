@@ -1,122 +1,34 @@
 import { getState } from '../state.js';
 import { getColorHex, UNASSIGNED_COLOR } from '../constants.js';
 
-export function getDisplayColor(territoryId, viewLevel) {
-  const state = getState();
-  const t = findDisplayTerritory(territoryId, viewLevel);
-  if (!t) return UNASSIGNED_COLOR;
-  return getColorHex(t.color.hue, t.color.shade);
+export function getDisplayColor(tid,viewLevel){const t=findDisplayTerritory(tid,viewLevel);if(!t)return UNASSIGNED_COLOR;return getColorHex(t.color.hue,t.color.shade);}
+
+export function findDisplayTerritory(tid,viewLevel){
+  const s=getState();let t=s.territories.get(tid);if(!t)return null;
+  if(t.rank<=viewLevel)return t;
+  const v=new Set();let cur=t;
+  while(cur){if(v.has(cur.id))break;v.add(cur.id);if(cur.rank<=viewLevel)return cur;if(!cur.parentId)break;cur=s.territories.get(cur.parentId);}
+  return cur||t;
 }
 
-export function findDisplayTerritory(territoryId, viewLevel) {
-  const state = getState();
-  let t = state.territories.get(territoryId);
-  if (!t) return null;
-  if (t.rank <= viewLevel) return t;
-  const visited = new Set();
-  let cur = t;
-  while (cur) {
-    if (visited.has(cur.id)) break;
-    visited.add(cur.id);
-    if (cur.rank <= viewLevel) return cur;
-    if (!cur.parentId) break;
-    cur = state.territories.get(cur.parentId);
-  }
-  return cur || t;
+export function findBorderInfo(tid1,tid2,state,viewLevel){
+  if(tid1===tid2)return null;
+  const c1=ancestryList(tid1,state),c2=ancestryList(tid2,state);
+  let depth=1;const ml=Math.min(c1.length,c2.length);
+  for(let i=0;i<ml;i++){if(c1[i]!==c2[i]){depth=i+1;break;}if(i===ml-1)depth=ml+1;}
+  if(c1.length!==c2.length&&depth>ml)depth=ml+1;
+  const dt1=findDisplayTerritory(tid1,viewLevel),dt2=findDisplayTerritory(tid2,viewLevel);
+  const vis=(!dt1&&!dt2)?false:(!dt1||!dt2)?true:dt1.id!==dt2.id;
+  return {depth,visible:vis};
 }
 
-/**
- * Depth-based border: find the shallowest depth at which two tiles diverge.
- * Depth = number of ancestors from root (root=1, child=2, grandchild=3...).
- * Returns { depth, visible } where visible = true only if the divergence
- * is at or above the current view level's corresponding display territories.
- */
-export function findBorderInfo(tid1, tid2, state, viewLevel) {
-  if (tid1 === tid2) return null;
-
-  // Get full ancestry chains
-  const chain1 = getAncestryList(tid1, state); // [root, ..., self]
-  const chain2 = getAncestryList(tid2, state);
-
-  // Find shallowest divergence depth
-  let divergeDepth = 1;
-  const minLen = Math.min(chain1.length, chain2.length);
-  for (let i = 0; i < minLen; i++) {
-    if (chain1[i] !== chain2[i]) { divergeDepth = i + 1; break; }
-    if (i === minLen - 1) { divergeDepth = minLen + 1; }
-  }
-  if (chain1.length !== chain2.length && divergeDepth > minLen) {
-    divergeDepth = minLen + 1;
-  }
-
-  // Determine display territories at current view level
-  const dt1 = findDisplayTerritory(tid1, viewLevel);
-  const dt2 = findDisplayTerritory(tid2, viewLevel);
-
-  // Border visible only if display territories differ
-  const visible = (!dt1 && !dt2) ? false :
-                  (!dt1 || !dt2) ? true :
-                  dt1.id !== dt2.id;
-
-  return { depth: divergeDepth, visible };
-}
-
-/**
- * Get ancestry list from root to self: [rootId, ..., selfId]
- */
-function getAncestryList(tid, state) {
-  if (!tid) return [];
-  const chain = [];
-  const visited = new Set();
-  let cur = state.territories.get(tid);
-  while (cur) {
-    if (visited.has(cur.id)) break;
-    visited.add(cur.id);
-    chain.unshift(cur.id); // prepend
-    if (!cur.parentId) break;
-    cur = state.territories.get(cur.parentId);
-  }
+function ancestryList(tid,state){
+  if(!tid)return[];const chain=[],v=new Set();let cur=state.territories.get(tid);
+  while(cur){if(v.has(cur.id))break;v.add(cur.id);chain.unshift(cur.id);if(!cur.parentId)break;cur=state.territories.get(cur.parentId);}
   return chain;
 }
 
-export function getChildren(territoryId, state) {
-  const children = [];
-  for (const t of state.territories.values()) {
-    if (t.parentId === territoryId) children.push(t);
-  }
-  children.sort((a, b) => (a.order || 0) - (b.order || 0));
-  return children;
-}
-
-export function getRoots(state) {
-  const roots = [];
-  for (const t of state.territories.values()) {
-    if (!t.parentId) roots.push(t);
-  }
-  roots.sort((a, b) => (a.order || 0) - (b.order || 0));
-  return roots;
-}
-
-export function isValidParent(territory, newParentId, state) {
-  if (!newParentId) return true;
-  const parent = state.territories.get(newParentId);
-  if (!parent) return false;
-  if (parent.rank >= territory.rank) return false;
-  const visited = new Set();
-  let cur = parent;
-  while (cur) {
-    if (cur.id === territory.id) return false;
-    if (visited.has(cur.id)) break;
-    visited.add(cur.id);
-    cur = cur.parentId ? state.territories.get(cur.parentId) : null;
-  }
-  return true;
-}
-
-export function countCells(territoryId, state) {
-  let c = 0;
-  for (let y = 0; y < state.mapHeight; y++)
-    for (let x = 0; x < state.mapWidth; x++)
-      if (state.cells[y][x].territoryId === territoryId) c++;
-  return c;
-}
+export function getChildren(tid,state){const r=[];for(const t of state.territories.values())if(t.parentId===tid)r.push(t);r.sort((a,b)=>(a.order||0)-(b.order||0));return r;}
+export function getRoots(state){const r=[];for(const t of state.territories.values())if(!t.parentId)r.push(t);r.sort((a,b)=>(a.order||0)-(b.order||0));return r;}
+export function isValidParent(t,pid,state){if(!pid)return true;const p=state.territories.get(pid);if(!p||p.rank>=t.rank)return false;const v=new Set();let c=p;while(c){if(c.id===t.id)return false;if(v.has(c.id))break;v.add(c.id);c=c.parentId?state.territories.get(c.parentId):null;}return true;}
+export function countCells(tid,state){let c=0;for(let y=0;y<state.mapHeight;y++)for(let x=0;x<state.mapWidth;x++)if(state.cells[y][x].territoryId===tid)c++;return c;}
