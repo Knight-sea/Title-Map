@@ -3,7 +3,7 @@ import { TERRAINS } from '../constants.js';
 import { checkEnclaves } from '../map/enclave.js';
 
 /**
- * Handle invasion click. Returns undo entry or null.
+ * Handle invasion click. Works with cells after lock.
  */
 export function invasionClick(x, y, button) {
   const state = getState();
@@ -13,31 +13,51 @@ export function invasionClick(x, y, button) {
 
   const cell = state.cells[y][x];
   const terrain = TERRAINS[cell.terrain];
-
-  // Mountain/sea can't be directly clicked
-  if (!terrain.canOwn) return null;
+  if (!terrain.canOwn && !cell.cellId) return null;
 
   const changes = [];
 
-  if (button === 0) {
-    // Left click: add to territory (from unassigned or other territory)
-    if (cell.territoryId !== targetId) {
+  if (state.locked && cell.cellId) {
+    // Cell-based: affect all tiles of this cell
+    const cellId = cell.cellId;
+    const firstTile = cell;
+
+    if (button === 0 && firstTile.territoryId !== targetId) {
+      // Add entire cell
+      for (let cy = 0; cy < state.mapHeight; cy++) {
+        for (let cx = 0; cx < state.mapWidth; cx++) {
+          if (state.cells[cy][cx].cellId === cellId && state.cells[cy][cx].territoryId !== targetId) {
+            changes.push({ x: cx, y: cy, prevTerritoryId: state.cells[cy][cx].territoryId });
+            state.cells[cy][cx].territoryId = targetId;
+          }
+        }
+      }
+    } else if (button === 2 && firstTile.territoryId === targetId) {
+      // Remove entire cell
+      for (let cy = 0; cy < state.mapHeight; cy++) {
+        for (let cx = 0; cx < state.mapWidth; cx++) {
+          if (state.cells[cy][cx].cellId === cellId && state.cells[cy][cx].territoryId === targetId) {
+            changes.push({ x: cx, y: cy, prevTerritoryId: targetId });
+            state.cells[cy][cx].territoryId = null;
+          }
+        }
+      }
+    }
+  } else {
+    // Tile-based (pre-lock)
+    if (!terrain.canOwn) return null;
+    if (button === 0 && cell.territoryId !== targetId) {
       changes.push({ x, y, prevTerritoryId: cell.territoryId });
       cell.territoryId = targetId;
-    }
-  } else if (button === 2) {
-    // Right click: remove from own territory
-    if (cell.territoryId === targetId) {
-      changes.push({ x, y, prevTerritoryId: cell.territoryId });
+    } else if (button === 2 && cell.territoryId === targetId) {
+      changes.push({ x, y, prevTerritoryId: targetId });
       cell.territoryId = null;
     }
   }
 
-  // Check enclaves after change
   if (changes.length > 0) {
-    const enclaveChanges = checkEnclaves(changes);
-    changes.push(...enclaveChanges);
+    const enc = checkEnclaves(changes);
+    changes.push(...enc);
   }
-
   return changes.length > 0 ? changes : null;
 }

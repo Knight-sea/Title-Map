@@ -6,7 +6,7 @@ export function initState(width, height) {
   for (let y = 0; y < height; y++) {
     const row = [];
     for (let x = 0; x < width; x++) {
-      row.push({ terrain: 'plain', territoryId: null });
+      row.push({ terrain: 'plain', territoryId: null, cellId: null });
     }
     cells.push(row);
   }
@@ -16,22 +16,23 @@ export function initState(width, height) {
     cells,
     territories: new Map(),
     players: new Map(),
+    cellRegions: new Map(), // cellId -> { id, color }
+    locked: false, // terrain + cells locked
     currentSlot: 0,
     slotName: '',
     settings: { soundcloudUrl: '' },
-    // UI state (not saved)
     ui: {
-      mode: 'normal', // 'normal' | 'terrain' | 'creation' | 'invasion'
+      mode: 'normal', // 'normal'|'terrain'|'cell'|'creation'|'invasion'
       selectedTerrain: null,
       brushSize: 1,
       selectedTerritoryId: null,
       selectedPlayerId: null,
       viewLevel: 0,
       showLabels: false,
-      creationSelectedCells: new Set(), // "x,y" strings
+      creationSelectedCells: new Set(), // cellId strings for creation
       invasionTargetId: null,
-      editorPanelCollapsed: false,
       activeTab: 'territory',
+      currentCellId: null, // cell being painted
     }
   };
   notify();
@@ -39,56 +40,33 @@ export function initState(width, height) {
 }
 
 export function getState() { return _state; }
-
-export function setState(partial) {
-  Object.assign(_state, partial);
-  notify();
-}
-
-export function setUI(partial) {
-  Object.assign(_state.ui, partial);
-  notify();
-}
-
-export function subscribe(fn) {
-  _listeners.push(fn);
-  return () => { _listeners = _listeners.filter(l => l !== fn); };
-}
-
-function notify() {
-  for (const fn of _listeners) fn(_state);
-}
+export function setState(partial) { Object.assign(_state, partial); notify(); }
+export function setUI(partial) { Object.assign(_state.ui, partial); notify(); }
+export function subscribe(fn) { _listeners.push(fn); return () => { _listeners = _listeners.filter(l => l !== fn); }; }
+function notify() { for (const fn of _listeners) fn(_state); }
 
 export function loadFromData(data) {
   initState(data.mapWidth, data.mapHeight);
-  // Decompress cells
   if (data.cells) {
     let idx = 0;
-    for (const [terrain, territoryId, count] of data.cells) {
+    for (const [terrain, territoryId, cellId, count] of data.cells) {
       for (let i = 0; i < count; i++) {
         const y = Math.floor(idx / data.mapWidth);
         const x = idx % data.mapWidth;
         if (y < data.mapHeight && x < data.mapWidth) {
-          _state.cells[y][x] = { terrain, territoryId };
+          _state.cells[y][x] = { terrain, territoryId, cellId };
         }
         idx++;
       }
     }
   }
-  // Load territories
   _state.territories = new Map();
-  if (data.territories) {
-    for (const t of data.territories) {
-      _state.territories.set(t.id, t);
-    }
-  }
-  // Load players
+  if (data.territories) for (const t of data.territories) _state.territories.set(t.id, t);
   _state.players = new Map();
-  if (data.players) {
-    for (const p of data.players) {
-      _state.players.set(p.id, p);
-    }
-  }
+  if (data.players) for (const p of data.players) _state.players.set(p.id, p);
+  _state.cellRegions = new Map();
+  if (data.cellRegions) for (const c of data.cellRegions) _state.cellRegions.set(c.id, c);
+  _state.locked = data.locked || false;
   _state.slotName = data.slotName || '';
   _state.settings = data.settings || { soundcloudUrl: '' };
   _state.currentSlot = data.currentSlot ?? 0;
@@ -97,41 +75,33 @@ export function loadFromData(data) {
 
 export function exportData() {
   const s = _state;
-  // RLE compress cells
   const compressed = [];
-  let prev = null;
-  let count = 0;
+  let prev = null, count = 0;
   for (let y = 0; y < s.mapHeight; y++) {
     for (let x = 0; x < s.mapWidth; x++) {
       const c = s.cells[y][x];
-      const key = `${c.terrain}|${c.territoryId}`;
-      if (key === prev) {
-        count++;
-      } else {
+      const key = `${c.terrain}|${c.territoryId}|${c.cellId}`;
+      if (key === prev) { count++; }
+      else {
         if (prev !== null) {
-          const [t, tid] = prev.split('|');
-          compressed.push([t, tid === 'null' ? null : tid, count]);
+          const [t, tid, cid] = prev.split('|');
+          compressed.push([t, tid === 'null' ? null : tid, cid === 'null' ? null : cid, count]);
         }
-        prev = key;
-        count = 1;
+        prev = key; count = 1;
       }
     }
   }
   if (prev !== null) {
-    const [t, tid] = prev.split('|');
-    compressed.push([t, tid === 'null' ? null : tid, count]);
+    const [t, tid, cid] = prev.split('|');
+    compressed.push([t, tid === 'null' ? null : tid, cid === 'null' ? null : cid, count]);
   }
-
   return {
-    version: 1,
-    slotName: s.slotName,
-    currentSlot: s.currentSlot,
-    mapWidth: s.mapWidth,
-    mapHeight: s.mapHeight,
-    cells: compressed,
+    version: 2, slotName: s.slotName, currentSlot: s.currentSlot,
+    mapWidth: s.mapWidth, mapHeight: s.mapHeight, cells: compressed,
     territories: Array.from(s.territories.values()),
     players: Array.from(s.players.values()),
-    settings: s.settings,
+    cellRegions: Array.from(s.cellRegions.values()),
+    locked: s.locked, settings: s.settings,
   };
 }
 

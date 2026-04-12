@@ -1,6 +1,10 @@
 import { getState, generateId } from '../state.js';
 
-export function createTerritory(name, rank, parentId, color, cells) {
+/**
+ * Create territory from selected cell IDs (after lock) or tile keys (before lock).
+ * cellIds: Set of cellId strings
+ */
+export function createTerritory(name, rank, parentId, color, cellIds) {
   const state = getState();
   const id = generateId();
   const territory = {
@@ -12,11 +16,24 @@ export function createTerritory(name, rank, parentId, color, cells) {
   };
   state.territories.set(id, territory);
 
-  // Assign cells
-  for (const key of cells) {
-    const [x, y] = key.split(',').map(Number);
-    if (y >= 0 && y < state.mapHeight && x >= 0 && x < state.mapWidth) {
-      state.cells[y][x].territoryId = id;
+  // Assign all tiles belonging to these cellIds
+  if (state.locked) {
+    for (const cellId of cellIds) {
+      for (let y = 0; y < state.mapHeight; y++) {
+        for (let x = 0; x < state.mapWidth; x++) {
+          if (state.cells[y][x].cellId === cellId) {
+            state.cells[y][x].territoryId = id;
+          }
+        }
+      }
+    }
+  } else {
+    // Pre-lock: cellIds are "x,y" tile keys
+    for (const key of cellIds) {
+      const [x, y] = key.split(',').map(Number);
+      if (y >= 0 && y < state.mapHeight && x >= 0 && x < state.mapWidth) {
+        state.cells[y][x].territoryId = id;
+      }
     }
   }
   return territory;
@@ -31,31 +48,13 @@ export function updateTerritory(id, updates) {
 
 export function deleteTerritory(id) {
   const state = getState();
-  // Remove cell assignments
   for (let y = 0; y < state.mapHeight; y++) {
     for (let x = 0; x < state.mapWidth; x++) {
-      if (state.cells[y][x].territoryId === id) {
-        state.cells[y][x].territoryId = null;
-      }
+      if (state.cells[y][x].territoryId === id) state.cells[y][x].territoryId = null;
     }
   }
-  // Re-parent children to null
   for (const t of state.territories.values()) {
     if (t.parentId === id) t.parentId = null;
   }
   state.territories.delete(id);
-}
-
-export function addCellToTerritory(territoryId, x, y) {
-  const state = getState();
-  if (x < 0 || x >= state.mapWidth || y < 0 || y >= state.mapHeight) return;
-  state.cells[y][x].territoryId = territoryId;
-}
-
-export function removeCellFromTerritory(territoryId, x, y) {
-  const state = getState();
-  if (x < 0 || x >= state.mapWidth || y < 0 || y >= state.mapHeight) return;
-  if (state.cells[y][x].territoryId === territoryId) {
-    state.cells[y][x].territoryId = null;
-  }
 }

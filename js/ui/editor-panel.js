@@ -11,222 +11,114 @@ const editorContent = () => document.getElementById('editor-content');
 
 export function renderEditor() {
   const state = getState();
-  const container = editorContent();
-
+  const c = editorContent();
   if (state.ui.activeTab === 'territory' && state.ui.selectedTerritoryId) {
-    renderTerritoryEditor(state.ui.selectedTerritoryId, container, state);
+    renderTerritoryEditor(state.ui.selectedTerritoryId, c, state);
   } else if (state.ui.activeTab === 'player' && state.ui.selectedPlayerId) {
-    renderPlayerEditor(state.ui.selectedPlayerId, container, state);
+    renderPlayerEditor(state.ui.selectedPlayerId, c, state);
   } else {
-    container.innerHTML = '<p class="editor-placeholder">領地またはプレイヤーを選択してください</p>';
+    c.innerHTML = '<p class="editor-placeholder">領地またはプレイヤーを選択</p>';
   }
 }
 
-function renderTerritoryEditor(tid, container, state) {
+function renderTerritoryEditor(tid, c, state) {
   const t = state.territories.get(tid);
-  if (!t) {
-    container.innerHTML = '<p class="editor-placeholder">領地が見つかりません</p>';
-    return;
-  }
-
+  if (!t) { c.innerHTML = '<p class="editor-placeholder">見つかりません</p>'; return; }
   const cells = countCells(tid, state);
   const colorHex = getColorHex(t.color.hue, t.color.shade);
-
-  // Build parent options
-  let parentOptions = '<option value="">なし (ルート)</option>';
-  for (const pt of state.territories.values()) {
-    if (pt.id === tid) continue;
-    if (pt.rank >= t.rank) continue; // parent must be higher rank
-    const sel = pt.id === t.parentId ? 'selected' : '';
-    parentOptions += `<option value="${pt.id}" ${sel}>${pt.name || '(名称なし)'} [${RANKS[pt.rank].name}]</option>`;
-  }
-
-  // Build rank options (if has parent, only ranks below parent)
   const parent = t.parentId ? state.territories.get(t.parentId) : null;
   const minRank = parent ? parent.rank + 1 : 0;
-  let rankOptions = '';
-  for (let i = minRank; i <= 6; i++) {
-    const sel = i === t.rank ? 'selected' : '';
-    rankOptions += `<option value="${i}" ${sel}>${RANKS[i].name}</option>`;
-  }
 
-  // Build player options
-  let playerOptions = '<option value="">未割当</option>';
-  for (const p of state.players.values()) {
-    const sel = p.id === t.playerId ? 'selected' : '';
-    playerOptions += `<option value="${p.id}" ${sel}>${p.name}</option>`;
+  let parentOpts = '<option value="">なし</option>';
+  for (const pt of state.territories.values()) {
+    if (pt.id === tid || pt.rank >= t.rank) continue;
+    parentOpts += `<option value="${pt.id}" ${pt.id === t.parentId ? 'selected' : ''}>${esc(pt.name || '(名称なし)')} [${RANKS[pt.rank].name}]</option>`;
   }
+  let rankOpts = '';
+  for (let i = minRank; i <= 6; i++) rankOpts += `<option value="${i}" ${i === t.rank ? 'selected' : ''}>${RANKS[i].name}</option>`;
+  let playerOpts = '<option value="">未割当</option>';
+  for (const p of state.players.values()) playerOpts += `<option value="${p.id}" ${p.id === t.playerId ? 'selected' : ''}>${esc(p.name)}</option>`;
 
-  container.innerHTML = `
-    <div class="form-group">
-      <label>名前</label>
-      <input type="text" id="ed-name" value="${escHtml(t.name || '')}">
-    </div>
+  c.innerHTML = `
+    <div class="form-group"><label>名前</label><input type="text" id="ed-name" value="${esc(t.name || '')}"></div>
     <div class="form-row">
-      <div class="form-group">
-        <label>爵位</label>
-        <select id="ed-rank">${rankOptions}</select>
-      </div>
-      <div class="form-group">
-        <label>色</label>
-        <div class="color-picker-trigger" id="ed-color" style="background:${colorHex}"></div>
-      </div>
+      <div class="form-group"><label>爵位</label><select id="ed-rank">${rankOpts}</select></div>
+      <div class="form-group"><label>色</label><div class="color-picker-trigger" id="ed-color" style="background:${colorHex}"></div></div>
     </div>
-    <div class="form-group">
-      <label>親領地</label>
-      <select id="ed-parent">${parentOptions}</select>
-    </div>
-    <div class="form-group">
-      <label>プレイヤー</label>
-      <select id="ed-player">${playerOptions}</select>
-    </div>
-    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">
-      マス数: ${cells}
-    </div>
+    <div class="form-group"><label>親領地</label><select id="ed-parent">${parentOpts}</select></div>
+    <div class="form-group"><label>プレイヤー</label><select id="ed-player">${playerOpts}</select></div>
+    <div style="font-size:10px;color:var(--text-muted);margin-bottom:6px">マス数: ${cells}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       <button class="btn btn-small btn-primary" id="ed-invade">領土を増やす</button>
       <button class="btn btn-small btn-danger" id="ed-delete">削除</button>
-    </div>
-  `;
+    </div>`;
 
-  // Bind events
-  const nameEl = container.querySelector('#ed-name');
-  nameEl.addEventListener('change', () => {
+  c.querySelector('#ed-name').addEventListener('change', (e) => {
     pushUndo({ territories: snapshotTerritories() });
-    updateTerritory(tid, { name: nameEl.value });
-    renderTree();
-    window.dispatchEvent(new CustomEvent('state-changed'));
+    updateTerritory(tid, { name: e.target.value }); renderTree(); fire('state-changed');
   });
-
-  container.querySelector('#ed-rank').addEventListener('change', (e) => {
+  c.querySelector('#ed-rank').addEventListener('change', (e) => {
     pushUndo({ territories: snapshotTerritories() });
-    updateTerritory(tid, { rank: parseInt(e.target.value) });
-    renderTree();
-    renderEditor();
-    window.dispatchEvent(new CustomEvent('state-changed'));
+    updateTerritory(tid, { rank: +e.target.value }); renderTree(); renderEditor(); fire('state-changed');
   });
-
-  container.querySelector('#ed-parent').addEventListener('change', (e) => {
-    const newParent = e.target.value || null;
-    const terr = state.territories.get(tid);
-    if (newParent && !isValidParent(terr, newParent, state)) return;
+  c.querySelector('#ed-parent').addEventListener('change', (e) => {
+    const np = e.target.value || null;
+    if (np && !isValidParent(state.territories.get(tid), np, state)) return;
     pushUndo({ territories: snapshotTerritories() });
-    updateTerritory(tid, { parentId: newParent });
-    renderTree();
-    renderEditor();
-    window.dispatchEvent(new CustomEvent('state-changed'));
+    updateTerritory(tid, { parentId: np }); renderTree(); renderEditor(); fire('state-changed');
   });
-
-  container.querySelector('#ed-player').addEventListener('change', (e) => {
+  c.querySelector('#ed-player').addEventListener('change', (e) => {
     pushUndo({ territories: snapshotTerritories() });
-    updateTerritory(tid, { playerId: e.target.value || null });
-    renderPlayerList();
-    window.dispatchEvent(new CustomEvent('state-changed'));
+    updateTerritory(tid, { playerId: e.target.value || null }); renderPlayerList(); fire('state-changed');
   });
-
-  container.querySelector('#ed-color').addEventListener('click', async () => {
-    const result = await openColorPicker(t.color);
-    if (result) {
-      pushUndo({ territories: snapshotTerritories() });
-      updateTerritory(tid, { color: result });
-      renderTree();
-      renderEditor();
-      window.dispatchEvent(new CustomEvent('state-changed'));
-    }
+  c.querySelector('#ed-color').addEventListener('click', async () => {
+    const r = await openColorPicker(t.color);
+    if (r) { pushUndo({ territories: snapshotTerritories() }); updateTerritory(tid, { color: r }); renderTree(); renderEditor(); fire('state-changed'); }
   });
-
-  container.querySelector('#ed-invade').addEventListener('click', () => {
-    setUI({ mode: 'invasion', invasionTargetId: tid });
-    window.dispatchEvent(new CustomEvent('mode-changed'));
+  c.querySelector('#ed-invade').addEventListener('click', () => {
+    setUI({ mode: 'invasion', invasionTargetId: tid }); fire('mode-changed');
   });
-
-  container.querySelector('#ed-delete').addEventListener('click', () => {
-    if (!confirm(`「${t.name || '(名称なし)'}」を削除しますか？`)) return;
-    pushUndo({ territories: snapshotTerritories(), changes: getAllCellsForTerritory(tid, state) });
-    deleteTerritory(tid);
-    setUI({ selectedTerritoryId: null });
-    renderTree();
-    renderEditor();
-    window.dispatchEvent(new CustomEvent('state-changed'));
+  c.querySelector('#ed-delete').addEventListener('click', () => {
+    if (!confirm(`「${t.name || '(名称なし)'}」を削除？`)) return;
+    pushUndo({ territories: snapshotTerritories(), changes: getAllTiles(tid, state) });
+    deleteTerritory(tid); setUI({ selectedTerritoryId: null }); renderTree(); renderEditor(); fire('state-changed');
   });
 }
 
-function renderPlayerEditor(pid, container, state) {
+function renderPlayerEditor(pid, c, state) {
   const p = state.players.get(pid);
-  if (!p) {
-    container.innerHTML = '<p class="editor-placeholder">プレイヤーが見つかりません</p>';
-    return;
-  }
-
+  if (!p) { c.innerHTML = '<p class="editor-placeholder">見つかりません</p>'; return; }
   const colorHex = getColorHex(p.color.hue, p.color.shade);
-
-  container.innerHTML = `
-    <div class="form-group">
-      <label>名前</label>
-      <input type="text" id="ed-pname" value="${escHtml(p.name || '')}">
-    </div>
+  c.innerHTML = `
+    <div class="form-group"><label>名前</label><input type="text" id="ed-pname" value="${esc(p.name || '')}"></div>
     <div class="form-row">
-      <div class="form-group">
-        <label>肩書き</label>
-        <input type="text" id="ed-ptitle" value="${escHtml(p.title || '')}">
-      </div>
-      <div class="form-group">
-        <label>イメージ色</label>
-        <div class="color-picker-trigger" id="ed-pcolor" style="background:${colorHex}"></div>
-      </div>
+      <div class="form-group"><label>肩書き</label><input type="text" id="ed-ptitle" value="${esc(p.title || '')}"></div>
+      <div class="form-group"><label>色</label><div class="color-picker-trigger" id="ed-pcolor" style="background:${colorHex}"></div></div>
     </div>
-    <div class="form-group">
-      <label>メモ</label>
-      <textarea id="ed-pmemo">${escHtml(p.memo || '')}</textarea>
-    </div>
-    <div style="display:flex;gap:6px">
-      <button class="btn btn-small btn-danger" id="ed-pdelete">削除</button>
-    </div>
-  `;
+    <div class="form-group"><label>メモ</label><textarea id="ed-pmemo">${esc(p.memo || '')}</textarea></div>
+    <button class="btn btn-small btn-danger" id="ed-pdelete">削除</button>`;
 
-  container.querySelector('#ed-pname').addEventListener('change', (e) => {
-    pushUndo({ players: snapshotPlayers() });
-    updatePlayer(pid, { name: e.target.value });
-    renderPlayerList();
+  c.querySelector('#ed-pname').addEventListener('change', (e) => { pushUndo({ players: snapshotPlayers() }); updatePlayer(pid, { name: e.target.value }); renderPlayerList(); });
+  c.querySelector('#ed-ptitle').addEventListener('change', (e) => updatePlayer(pid, { title: e.target.value }));
+  c.querySelector('#ed-pmemo').addEventListener('change', (e) => updatePlayer(pid, { memo: e.target.value }));
+  c.querySelector('#ed-pcolor').addEventListener('click', async () => {
+    const r = await openColorPicker(p.color);
+    if (r) { pushUndo({ players: snapshotPlayers() }); updatePlayer(pid, { color: r }); renderPlayerList(); renderEditor(); }
   });
-  container.querySelector('#ed-ptitle').addEventListener('change', (e) => {
-    updatePlayer(pid, { title: e.target.value });
-  });
-  container.querySelector('#ed-pmemo').addEventListener('change', (e) => {
-    updatePlayer(pid, { memo: e.target.value });
-  });
-  container.querySelector('#ed-pcolor').addEventListener('click', async () => {
-    const result = await openColorPicker(p.color);
-    if (result) {
-      pushUndo({ players: snapshotPlayers() });
-      updatePlayer(pid, { color: result });
-      renderPlayerList();
-      renderEditor();
-    }
-  });
-  container.querySelector('#ed-pdelete').addEventListener('click', () => {
-    if (!confirm(`「${p.name}」を削除しますか？`)) return;
+  c.querySelector('#ed-pdelete').addEventListener('click', () => {
+    if (!confirm(`「${p.name}」を削除？`)) return;
     pushUndo({ players: snapshotPlayers(), territories: snapshotTerritories() });
-    deletePlayer(pid);
-    setUI({ selectedPlayerId: null });
-    renderPlayerList();
-    renderEditor();
-    window.dispatchEvent(new CustomEvent('state-changed'));
+    deletePlayer(pid); setUI({ selectedPlayerId: null }); renderPlayerList(); renderEditor(); fire('state-changed');
   });
 }
 
-function getAllCellsForTerritory(tid, state) {
-  const changes = [];
-  for (let y = 0; y < state.mapHeight; y++) {
-    for (let x = 0; x < state.mapWidth; x++) {
-      if (state.cells[y][x].territoryId === tid) {
-        changes.push({ x, y, prevTerritoryId: tid });
-      }
-    }
-  }
-  return changes;
+function getAllTiles(tid, state) {
+  const ch = [];
+  for (let y = 0; y < state.mapHeight; y++)
+    for (let x = 0; x < state.mapWidth; x++)
+      if (state.cells[y][x].territoryId === tid) ch.push({ x, y, prevTerritoryId: tid });
+  return ch;
 }
 
-function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fire(name) { window.dispatchEvent(new CustomEvent(name)); }
