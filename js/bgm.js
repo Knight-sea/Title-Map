@@ -1,14 +1,4 @@
 let widget=null,iframe=null;
-export function initBGM() {
-  document.getElementById('bgm-play').addEventListener('click',()=>{if(widget)widget.play();});
-  document.getElementById('bgm-stop').addEventListener('click',()=>{if(widget)widget.pause();});
-  document.getElementById('bgm-volume').addEventListener('input',(e)=>{if(widget)widget.setVolume(+e.target.value);});
-}
-export function loadSoundCloud(url) {
-  if(!url)return; if(iframe)iframe.remove();
-  iframe=document.createElement('iframe'); iframe.width='0';iframe.height='0';iframe.style.display='none';iframe.allow='autoplay';
-  iframe.src=`https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&auto_play=false`;
-  document.body.appendChild(iframe);
-  if(!window.SC){const s=document.createElement('script');s.src='https://w.soundcloud.com/player/api.js';s.onload=()=>initW();document.body.appendChild(s);}else initW();
-}
+export function initBGM(){document.getElementById('bgm-play').onclick=()=>{if(widget)widget.play();};document.getElementById('bgm-stop').onclick=()=>{if(widget)widget.pause();};document.getElementById('bgm-volume').oninput=e=>{if(widget)widget.setVolume(+e.target.value);};}
+export function loadSoundCloud(url){if(!url)return;if(iframe)iframe.remove();iframe=document.createElement('iframe');iframe.width='0';iframe.height='0';iframe.style.display='none';iframe.allow='autoplay';iframe.src=`https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&auto_play=false`;document.body.appendChild(iframe);if(!window.SC){const s=document.createElement('script');s.src='https://w.soundcloud.com/player/api.js';s.onload=()=>initW();document.body.appendChild(s);}else initW();}
 function initW(){if(!iframe||!window.SC)return;widget=SC.Widget(iframe);widget.bind(SC.Widget.Events.FINISH,()=>{widget.seekTo(0);widget.play();});}

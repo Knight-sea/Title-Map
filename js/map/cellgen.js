@@ -1,79 +1,86 @@
 import { getState, generateId } from '../state.js';
 import { TERRAINS } from '../constants.js';
 
-/**
- * Auto-generate cells using region growth.
- * cellSize: target number of tiles per cell (1~20)
- */
 export function autoGenerateCells(cellSize) {
-  const s = getState();
-  const w = s.mapWidth, h = s.mapHeight;
-
-  // Clear existing
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) s.cells[y][x].cellId = null;
+  const s = getState(), W = s.mapWidth, H = s.mapHeight;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) s.cells[y][x].cellId = null;
   s.cellRegions.clear();
 
-  // Build list of ownable tiles
-  const ownable = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    ownable[y * w + x] = TERRAINS[s.cells[y][x].terrain].canOwn ? 1 : 0;
-  }
+  const ownable = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
+    ownable[y * W + x] = TERRAINS[s.cells[y][x].terrain].canOwn ? 1 : 0;
 
-  const assigned = new Uint8Array(w * h);
+  const assigned = new Uint8Array(W * H);
   const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
 
-  // Scan left-to-right, top-to-bottom for seeds
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (!ownable[y * w + x] || assigned[y * w + x]) continue;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (!ownable[y * W + x] || assigned[y * W + x]) continue;
 
-      // Start a new cell from this seed
       const id = generateId();
-      const color = { hue: (s.cellRegions.size * 7) % 25, shade: (s.cellRegions.size * 3) % 5 };
-      s.cellRegions.set(id, { id, color });
+      s.cellRegions.set(id, { id });
 
-      // Region growth: BFS prioritized by distance from seed
+      // Vary target size slightly: ±1
+      const variation = Math.random() < 0.1 ? (Math.random() < 0.5 ? -1 : 1) : 0;
+      const targetSize = Math.max(1, cellSize + variation);
+
+      const seedTerrain = s.cells[y][x].terrain;
       const region = [];
-      // Priority queue approximation: use array sorted by distance
-      const candidates = [{ x, y, dist: 0 }];
+      const candidates = [{ x, y, dist: 0, crossBorder: false }];
       const inQueue = new Set([`${x},${y}`]);
 
-      while (region.length < cellSize && candidates.length > 0) {
-        // Pick candidate closest to seed (compact shape)
-        let bestIdx = 0, bestDist = candidates[0].dist;
+      while (region.length < targetSize && candidates.length > 0) {
+        // Sort: prefer non-border-crossing, then by distance
+        let bestIdx = 0, bestScore = scoreCandidate(candidates[0]);
         for (let i = 1; i < candidates.length; i++) {
-          if (candidates[i].dist < bestDist) { bestDist = candidates[i].dist; bestIdx = i; }
+          const sc = scoreCandidate(candidates[i]);
+          if (sc < bestScore) { bestScore = sc; bestIdx = i; }
         }
         const cur = candidates.splice(bestIdx, 1)[0];
 
-        if (assigned[cur.y * w + cur.x]) continue;
-        if (!ownable[cur.y * w + cur.x]) continue;
+        if (assigned[cur.y * W + cur.x]) continue;
+        if (!ownable[cur.y * W + cur.x]) continue;
 
-        // Assign
-        assigned[cur.y * w + cur.x] = 1;
+        assigned[cur.y * W + cur.x] = 1;
         s.cells[cur.y][cur.x].cellId = id;
         region.push(cur);
 
-        // Add neighbors as candidates
         for (const [dx, dy] of dirs) {
           const nx = cur.x + dx, ny = cur.y + dy;
-          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
           const nk = `${nx},${ny}`;
-          if (inQueue.has(nk) || assigned[ny * w + nx]) continue;
-          if (!ownable[ny * w + nx]) continue;
+          if (inQueue.has(nk) || assigned[ny * W + nx]) continue;
+          if (!ownable[ny * W + nx]) continue;
           inQueue.add(nk);
-          // Chebyshev distance from seed for compactness
           const dist = Math.max(Math.abs(nx - x), Math.abs(ny - y));
-          candidates.push({ x: nx, y: ny, dist });
+          const crossBorder = s.cells[ny][nx].terrain !== seedTerrain;
+          candidates.push({ x: nx, y: ny, dist, crossBorder });
         }
       }
     }
   }
 
+  // Second pass: absorb tiny orphan pockets (1-2 tiles) into neighbor cells
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!ownable[y * W + x] || s.cells[y][x].cellId) continue;
+    // Find a neighbor cell to join
+    for (const [dx, dy] of dirs) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+      const nCid = s.cells[ny][nx].cellId;
+      if (nCid) { s.cells[y][x].cellId = nCid; break; }
+    }
+  }
+
   // Clean up empty regions
   const used = new Set();
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
     if (s.cells[y][x].cellId) used.add(s.cells[y][x].cellId);
   for (const id of [...s.cellRegions.keys()])
     if (!used.has(id)) s.cellRegions.delete(id);
+}
+
+function scoreCandidate(c) {
+  // Prefer: close distance, same terrain (no border crossing)
+  return c.dist * 2 + (c.crossBorder ? 10 : 0);
 }

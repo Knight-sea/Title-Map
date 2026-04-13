@@ -1,16 +1,2 @@
-import { getState } from '../state.js';
-import { TERRAINS } from '../constants.js';
-export function paintTerrain(cx,cy,type,brushSize){
-  const s=getState(),changes=[],r=Math.floor(brushSize/2);
-  for(let dy=-r;dy<=r;dy++) for(let dx=-r;dx<=r;dx++){
-    const x=cx+dx,y=cy+dy;
-    if(x<0||x>=s.mapWidth||y<0||y>=s.mapHeight)continue;
-    const c=s.cells[y][x];
-    if(c.terrain!==type){
-      changes.push({x,y,prevTerrain:c.terrain,prevTerritoryId:c.territoryId});
-      c.terrain=type;
-      if(!TERRAINS[type].canOwn&&c.territoryId)c.territoryId=null;
-    }
-  }
-  return changes;
-}
+import{getState}from'../state.js';import{TERRAINS}from'../constants.js';
+export function paintTerrain(cx,cy,type,brushSize){const s=getState(),changes=[],r=Math.floor(brushSize/2);for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){const x=cx+dx,y=cy+dy;if(x<0||x>=s.mapWidth||y<0||y>=s.mapHeight)continue;const c=s.cells[y][x];if(c.terrain!==type){changes.push({x,y,prevTerrain:c.terrain,prevTerritoryId:c.territoryId});c.terrain=type;if(!TERRAINS[type].canOwn&&c.territoryId)c.territoryId=null;}}return changes;}
