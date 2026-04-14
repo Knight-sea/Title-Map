@@ -1,545 +1,462 @@
 import { getState } from '../state.js';
 
+// ============================================================
+//  Civ4スタイル マップ生成
+//  - ドメインワーピングによる凸凹海岸線
+//  - 勾配ベースの山岳 (傾斜×標高)
+//  - Watershed法による川 (凹地補填→D8流向→流量蓄積)
+//  - 海岸距離＋標高の湿度モデルによる森
+//  - プレビューは本番と同一パイプライン使用
+// ============================================================
+
+// ========== Public API ==========
+
 export function generateMap(params) {
   const { width: W, height: H, shape, seaPct, mountainPct, forestDensity, riverDensity, seed } = params;
   const s = getState();
-  const rng = makeRng(seed);
 
-  // 1. Elevation noise (land/sea shape)
-  const elev = new Float32Array(W * H);
-  const octs = buildOctaves(W, H);
+  const { terrain } = runPipeline(W, H, shape, seaPct, mountainPct, forestDensity, riverDensity, seed, false);
+
+  const names = ['sea', 'plain', 'mountain', 'forest', 'river'];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    let v = 0;
-    for (const o of octs) v += o.a * vNoise(x / o.s, y / o.s, seed + octs.indexOf(o) * 1000);
-    v *= shapeMask(x, y, W, H, shape, seed);
-    v *= edgeFade(x, y, W, H, shape);
-    elev[y * W + x] = v;
-  }
-
-  // Sea threshold by percentile
-  const sorted = Float32Array.from(elev).sort();
-  const seaT = sorted[Math.floor(sorted.length * seaPct / 100)] || -999;
-
-  // Mark sea
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    s.cells[y][x].terrain = elev[y * W + x] <= seaT ? 'sea' : 'plain';
+    s.cells[y][x].terrain = names[terrain[y * W + x]];
     s.cells[y][x].territoryId = null;
     s.cells[y][x].cellId = null;
   }
-
-  // 2. Mountain ridges via spline backbones
-  const ridgeLines = generateRidgeLines(W, H, shape, mountainPct, rng);
-  const mtnMap = new Float32Array(W * H);
-  for (const line of ridgeLines) {
-    const pts = interpolateSpline(line.controlPts, 2);
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      if (s.cells[y][x].terrain === 'sea') continue;
-      const d = distToPolyline(x, y, pts);
-      // Width varies with noise
-      const widthNoise = 0.5 + vNoise(x / 20, y / 20, seed + 7777) * 1.0;
-      const w = line.baseWidth * widthNoise;
-      // Ridge noise for texture
-      const ridge = ridgeNoise(x / 8, y / 8, seed + 3333);
-      // Gap noise for passes
-      const nearest = nearestParamOnPolyline(x, y, pts);
-      const gapN = vNoise(nearest * 3, 0.5, seed + 5555);
-      const gapFactor = gapN < 0.25 ? 0 : 1; // 25% chance of gap
-
-      if (d < w && ridge > 0.3 && gapFactor > 0) {
-        const score = (1 - d / w) * ridge * gapFactor;
-        mtnMap[y * W + x] = Math.max(mtnMap[y * W + x], score);
-      }
-    }
-  }
-
-  // Independent peaks
-  const numPeaks = Math.round(W * H * mountainPct / 100 * 0.0003);
-  for (let i = 0; i < numPeaks; i++) {
-    const px = Math.floor(rng() * W), py = Math.floor(rng() * H);
-    if (s.cells[py][px].terrain === 'sea') continue;
-    const r = 1 + Math.floor(rng() * 2);
-    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
-      const nx = px + dx, ny = py + dy;
-      if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-      if (s.cells[ny][nx].terrain === 'sea') continue;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist <= r) mtnMap[ny * W + nx] = Math.max(mtnMap[ny * W + nx], 0.6);
-    }
-  }
-
-  // Apply mountain threshold by percentile of land tiles
-  const landMtn = [];
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
-    if (s.cells[y][x].terrain !== 'sea' && mtnMap[y * W + x] > 0) landMtn.push(mtnMap[y * W + x]);
-  landMtn.sort((a, b) => a - b);
-  // Target: mountainPct of LAND tiles
-  const landCount = landMtn.length + (W * H - landMtn.length); // approximate
-  let totalLand = 0;
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (s.cells[y][x].terrain !== 'sea') totalLand++;
-  const targetMtnCount = Math.floor(totalLand * mountainPct / 100);
-  const mtnThresh = landMtn.length > targetMtnCount ? landMtn[landMtn.length - targetMtnCount] : 0;
-
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    if (s.cells[y][x].terrain !== 'sea' && mtnMap[y * W + x] >= mtnThresh && mtnMap[y * W + x] > 0.1) {
-      s.cells[y][x].terrain = 'mountain';
-    }
-  }
-
-  // 3. Fill isolated plains inside mountains
-  fillIsolatedPlains(s, W, H);
-
-  // 4. Mountain width guard
-  mountainWidthGuard(s, W, H, mountainPct, rng);
-
-  // 5. Forest with domain warping
-  if (forestDensity !== 'なし') {
-    const fMap = { '小': 0.15, '中': 0.35, '大': 0.60 };
-    const fPct = fMap[forestDensity] || 0;
-    const humid = new Float32Array(W * H);
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const wx = x + vNoise(x / 30, y / 30, seed + 200) * 8;
-      const wy = y + vNoise(x / 30, y / 30, seed + 300) * 8;
-      let v = 0;
-      for (let o = 0; o < 5; o++) v += octs[o].a * vNoise(wx / octs[o].s, wy / octs[o].s, seed + 5000 + o * 1000);
-      humid[y * W + x] = v;
-    }
-    const hSorted = [];
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
-      if (s.cells[y][x].terrain === 'plain') hSorted.push(humid[y * W + x]);
-    hSorted.sort((a, b) => a - b);
-    const fT = hSorted[Math.floor(hSorted.length * (1 - fPct))] || 999;
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
-      if (s.cells[y][x].terrain === 'plain' && humid[y * W + x] >= fT) s.cells[y][x].terrain = 'forest';
-  }
-
-  // 6. Rivers
-  if (riverDensity !== 'なし') {
-    const rMap = { '小': 0.04, '中': 0.1, '大': 0.2 };
-    const numR = Math.max(1, Math.round(Math.sqrt(W * H) * (rMap[riverDensity] || 0)));
-    genRivers(s, elev, W, H, numR, rng);
-  }
-
-  // 7. Inland sea → lake or remove
-  fixInlandSea(s, W, H);
-
-  // 8. Post-process: remove isolated tiles
-  for (let pass = 0; pass < 2; pass++) {
-    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
-      const t = s.cells[y][x].terrain;
-      if (t === 'river') continue;
-      let same = 0;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        if (s.cells[y + dy][x + dx].terrain === t) same++;
-      }
-      if (same <= 1) {
-        const counts = {};
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const nt = s.cells[y + dy][x + dx].terrain;
-          if (nt !== 'river') counts[nt] = (counts[nt] || 0) + 1;
-        }
-        let best = t, bc = 0;
-        for (const [k, v] of Object.entries(counts)) if (v > bc) { best = k; bc = v; }
-        s.cells[y][x].terrain = best;
-      }
-    }
-  }
 }
 
-function generateRidgeLines(W, H, shape, mtnPct, rng) {
-  const lines = [];
-  const baseCount = Math.max(1, Math.round(Math.sqrt(W * H) / 30 * (mtnPct / 15)));
-  const count = Math.min(baseCount, 12);
-  const maxDim = Math.max(W, H);
-
-  for (let i = 0; i < count; i++) {
-    const numPts = 4 + Math.floor(rng() * 5);
-    const pts = [];
-    // Start point biased toward center for continents
-    let sx, sy, angle;
-    if (shape === 'パンゲア' || shape === '大陸') {
-      sx = W * (0.2 + rng() * 0.6);
-      sy = H * (0.2 + rng() * 0.6);
-      angle = rng() * Math.PI * 2;
-    } else if (shape === '内海') {
-      const a = rng() * Math.PI * 2;
-      sx = W / 2 + Math.cos(a) * W * 0.25;
-      sy = H / 2 + Math.sin(a) * H * 0.25;
-      angle = a + Math.PI / 2;
-    } else {
-      sx = rng() * W;
-      sy = rng() * H;
-      angle = rng() * Math.PI * 2;
-    }
-
-    for (let p = 0; p < numPts; p++) {
-      const step = maxDim * (0.08 + rng() * 0.12);
-      const px = sx + Math.cos(angle) * step * p;
-      const py = sy + Math.sin(angle) * step * p;
-      pts.push([px, py]);
-      angle += (rng() - 0.5) * 1.2; // Gentle curve
-    }
-
-    // Width: mostly 1-2, occasionally wider based on mtnPct
-    const bigChance = mtnPct > 10 ? 0.15 : 0.05;
-    const baseWidth = rng() < bigChance ? (2 + rng() * 3) : (1 + rng() * 1.5);
-
-    lines.push({ controlPts: pts, baseWidth });
-  }
-  return lines;
-}
-
-function interpolateSpline(pts, step) {
-  if (pts.length < 2) return pts;
-  const result = [];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[Math.max(0, i - 1)];
-    const p1 = pts[i];
-    const p2 = pts[Math.min(pts.length - 1, i + 1)];
-    const p3 = pts[Math.min(pts.length - 1, i + 2)];
-    for (let t = 0; t < 1; t += 1 / (step * 5)) {
-      result.push(catmullRom(p0, p1, p2, p3, t));
-    }
-  }
-  result.push(pts[pts.length - 1]);
-  return result;
-}
-
-function catmullRom(p0, p1, p2, p3, t) {
-  const t2 = t * t, t3 = t2 * t;
-  return [
-    0.5 * (2 * p1[0] + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
-    0.5 * (2 * p1[1] + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)
-  ];
-}
-
-function distToPolyline(px, py, pts) {
-  let min = Infinity;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const d = distToSegment(px, py, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
-    if (d < min) min = d;
-  }
-  return min;
-}
-
-function nearestParamOnPolyline(px, py, pts) {
-  let minD = Infinity, param = 0, totalLen = 0;
-  const lens = [];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const dx = pts[i + 1][0] - pts[i][0], dy = pts[i + 1][1] - pts[i][1];
-    lens.push(Math.sqrt(dx * dx + dy * dy));
-    totalLen += lens[i];
-  }
-  let cumLen = 0;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const d = distToSegment(px, py, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
-    if (d < minD) { minD = d; param = (cumLen + lens[i] * 0.5) / totalLen; }
-    cumLen += lens[i];
-  }
-  return param;
-}
-
-function distToSegment(px, py, ax, ay, bx, by) {
-  const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
-  if (len2 === 0) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
-  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.sqrt((px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2);
-}
-
-function fillIsolatedPlains(s, W, H) {
-  // BFS from edges to find connected plain/forest areas. Isolated ones → mountain
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const t = s.cells[y][x].terrain;
-    if (t !== 'plain' && t !== 'forest') continue;
-    // Quick check: is this surrounded by mountains?
-    let trapped = true;
-    const queue = [[x, y]], visited = new Set([`${x},${y}`]);
-    let escaped = false;
-    while (queue.length && !escaped) {
-      const [cx, cy] = queue.shift();
-      for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
-        const nx = cx + dx, ny = cy + dy;
-        if (nx < 0 || nx >= W || ny < 0 || ny >= H) { escaped = true; break; }
-        const nk = `${nx},${ny}`;
-        if (visited.has(nk)) continue;
-        const nt = s.cells[ny][nx].terrain;
-        if (nt === 'plain' || nt === 'forest' || nt === 'river') {
-          visited.add(nk);
-          if (visited.size > 20) { escaped = true; break; } // Large enough = not trapped
-          queue.push([nx, ny]);
-        } else if (nt === 'sea') { escaped = true; break; }
-      }
-    }
-    if (!escaped && visited.size <= 3) {
-      for (const k of visited) {
-        const [fx, fy] = k.split(',').map(Number);
-        s.cells[fy][fx].terrain = 'mountain';
-      }
-    }
-  }
-}
-
-function mountainWidthGuard(s, W, H, mtnPct, rng) {
-  const maxRun = mtnPct > 20 ? 10 : (mtnPct > 10 ? 8 : 6);
-  // Horizontal
-  for (let y = 0; y < H; y++) {
-    let run = 0;
-    for (let x = 0; x < W; x++) {
-      if (s.cells[y][x].terrain === 'mountain') { run++; if (run > maxRun) s.cells[y][x].terrain = 'plain'; }
-      else run = 0;
-    }
-  }
-  // Vertical
-  for (let x = 0; x < W; x++) {
-    let run = 0;
-    for (let y = 0; y < H; y++) {
-      if (s.cells[y][x].terrain === 'mountain') { run++; if (run > maxRun) s.cells[y][x].terrain = 'plain'; }
-      else run = 0;
-    }
-  }
-}
-
-function genRivers(s, elev, W, H, count, rng) {
-  const sources = [];
-  for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++)
-    if (s.cells[y][x].terrain === 'mountain') sources.push([x, y]);
-  if (!sources.length) return;
-
-  for (let r = 0; r < count; r++) {
-    const [sx, sy] = sources[Math.floor(rng() * sources.length)];
-    let cx = sx, cy = sy;
-    const visited = new Set(), path = [];
-    for (let step = 0; step < W + H; step++) {
-      const key = `${cx},${cy}`;
-      if (visited.has(key)) break;
-      visited.add(key);
-      if (s.cells[cy][cx].terrain === 'sea') break;
-      path.push([cx, cy]);
-      let bestE = elev[cy * W + cx], bx = -1, by = -1;
-      const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
-      for (let i = dirs.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [dirs[i], dirs[j]] = [dirs[j], dirs[i]]; }
-      for (const [dx, dy] of dirs) {
-        const nx = cx + dx, ny = cy + dy;
-        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-        const ne = elev[ny * W + nx];
-        if (ne < bestE || (ne === bestE && rng() < 0.3)) { bestE = ne; bx = nx; by = ny; }
-      }
-      // Meander in plains
-      if (bx >= 0 && s.cells[cy][cx].terrain !== 'mountain') {
-        const mOff = (rng() - 0.5) * 2;
-        const perpX = -(by - cy), perpY = bx - cx;
-        const mx = bx + Math.round(perpX * mOff * 0.3), my = by + Math.round(perpY * mOff * 0.3);
-        if (mx >= 0 && mx < W && my >= 0 && my < H && s.cells[my][mx].terrain !== 'sea' && s.cells[my][mx].terrain !== 'mountain') {
-          bx = mx; by = my;
-        }
-      }
-      if (bx < 0) break;
-      cx = bx; cy = by;
-    }
-    if (path.length >= 5) {
-      for (let i = 1; i < path.length; i++) {
-        const [px, py] = path[i];
-        const t = s.cells[py][px].terrain;
-        if (t === 'plain' || t === 'forest') {
-          s.cells[py][px].terrain = 'river';
-          // Occasionally 2-wide
-          if (rng() < 0.15 && i > 2) {
-            const dx = path[i][0] - path[i - 1][0], dy = path[i][1] - path[i - 1][1];
-            const px2 = px + (dy !== 0 ? 1 : 0), py2 = py + (dx !== 0 ? 1 : 0);
-            if (px2 >= 0 && px2 < W && py2 >= 0 && py2 < H) {
-              const t2 = s.cells[py2][px2].terrain;
-              if (t2 === 'plain' || t2 === 'forest') s.cells[py2][px2].terrain = 'river';
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
-function fixInlandSea(s, W, H) {
-  // BFS from map edges to find ocean-connected sea. Everything else → plain (or small lake)
-  const ocean = new Uint8Array(W * H);
-  const queue = [];
-  for (let x = 0; x < W; x++) {
-    if (s.cells[0][x].terrain === 'sea') { queue.push([x, 0]); ocean[x] = 1; }
-    if (s.cells[H - 1][x].terrain === 'sea') { queue.push([x, H - 1]); ocean[(H - 1) * W + x] = 1; }
-  }
-  for (let y = 0; y < H; y++) {
-    if (s.cells[y][0].terrain === 'sea') { queue.push([0, y]); ocean[y * W] = 1; }
-    if (s.cells[y][W - 1].terrain === 'sea') { queue.push([W - 1, y]); ocean[y * W + W - 1] = 1; }
-  }
-  while (queue.length) {
-    const [cx, cy] = queue.shift();
-    for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
-      const nx = cx + dx, ny = cy + dy;
-      if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-      if (ocean[ny * W + nx] || s.cells[ny][nx].terrain !== 'sea') continue;
-      ocean[ny * W + nx] = 1;
-      queue.push([nx, ny]);
-    }
-  }
-  // Remove inland seas (keep small lakes ≤ 20 tiles)
-  const checked = new Set();
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    if (s.cells[y][x].terrain !== 'sea' || ocean[y * W + x]) continue;
-    const k = `${x},${y}`;
-    if (checked.has(k)) continue;
-    // BFS to find inland sea size
-    const region = [], q = [[x, y]], v = new Set([k]);
-    while (q.length) {
-      const [cx, cy] = q.shift();
-      region.push([cx, cy]);
-      checked.add(`${cx},${cy}`);
-      for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
-        const nx = cx + dx, ny = cy + dy, nk = `${nx},${ny}`;
-        if (nx < 0 || nx >= W || ny < 0 || ny >= H || v.has(nk)) continue;
-        if (s.cells[ny][nx].terrain === 'sea' && !ocean[ny * W + nx]) { v.add(nk); q.push([nx, ny]); }
-      }
-    }
-    if (region.length > 20) {
-      // Too big for a lake → convert to plain
-      for (const [rx, ry] of region) s.cells[ry][rx].terrain = 'plain';
-    }
-    // ≤ 20 tiles: keep as lake (sea)
-  }
-}
-
-// === Preview (exported for gen screen) ===
 export function generatePreview(W, H, params) {
   const { shape, seaPct, mountainPct, forestDensity, riverDensity, seed } = params;
-  const rng = makeRng(seed);
-  const octs = buildOctaves(W, H);
-  const elev = new Float32Array(W * H);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    let v = 0;
-    for (const o of octs) v += o.a * vNoise(x / o.s, y / o.s, seed + octs.indexOf(o) * 1000);
-    v *= shapeMask(x, y, W, H, shape, seed);
-    v *= edgeFade(x, y, W, H, shape);
-    elev[y * W + x] = v;
-  }
-  const sorted = Float32Array.from(elev).sort();
-  const seaT = sorted[Math.floor(sorted.length * seaPct / 100)] || -999;
+  const { terrain } = runPipeline(W, H, shape, seaPct, mountainPct, forestDensity, riverDensity, seed, true);
 
-  // Simplified ridge detection for preview
-  const ridgeLines = generateRidgeLines(W, H, shape, mountainPct, rng);
-  const mtnScore = new Float32Array(W * H);
-  for (const line of ridgeLines) {
-    const pts = interpolateSpline(line.controlPts, 2);
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      if (elev[y * W + x] <= seaT) continue;
-      const d = distToPolyline(x, y, pts);
-      if (d < line.baseWidth * 1.5) mtnScore[y * W + x] = Math.max(mtnScore[y * W + x], 1 - d / (line.baseWidth * 1.5));
-    }
-  }
-
-  const landScores = [];
-  for (let i = 0; i < W * H; i++) if (elev[i] > seaT && mtnScore[i] > 0) landScores.push(mtnScore[i]);
-  landScores.sort((a, b) => a - b);
-  let tLand = 0;
-  for (let i = 0; i < W * H; i++) if (elev[i] > seaT) tLand++;
-  const tMtn = Math.floor(tLand * mountainPct / 100);
-  const mtnT2 = landScores.length > tMtn ? landScores[landScores.length - tMtn] : 0;
-
-  // Humidity for forest
-  const fMap = { 'なし': 999, '小': 0.85, '中': 0.65, '大': 0.40 };
-  const humid = new Float32Array(W * H);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    let v = 0;
-    for (let o = 0; o < 5; o++) v += octs[o].a * vNoise(x / octs[o].s, y / octs[o].s, seed + 5000 + o * 1000);
-    humid[y * W + x] = v;
-  }
-  const hS = [];
-  for (let i = 0; i < W * H; i++) if (elev[i] > seaT && mtnScore[i] < mtnT2) hS.push(humid[i]);
-  hS.sort((a, b) => a - b);
-  const fPct = fMap[forestDensity] || 999;
-  const fT = hS[Math.floor(hS.length * fPct)] || 999;
-
-  // Simple rivers for preview
-  const riverSet = new Set();
-  if (riverDensity !== 'なし') {
-    const rMap = { '小': 0.04, '中': 0.1, '大': 0.2 };
-    const numR = Math.max(1, Math.round(Math.sqrt(W * H) * (rMap[riverDensity] || 0)));
-    const mtnTiles = [];
-    for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++)
-      if (elev[y * W + x] > seaT && mtnScore[y * W + x] >= mtnT2) mtnTiles.push([x, y]);
-    for (let r = 0; r < numR && mtnTiles.length; r++) {
-      let [cx, cy] = mtnTiles[Math.floor(rng() * mtnTiles.length)];
-      const visited = new Set();
-      for (let step = 0; step < W + H; step++) {
-        const k = `${cx},${cy}`;
-        if (visited.has(k) || elev[cy * W + cx] <= seaT) break;
-        visited.add(k);
-        riverSet.add(k);
-        let bE = elev[cy * W + cx], bx = -1, by = -1;
-        for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
-          const nx = cx + dx, ny = cy + dy;
-          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
-          if (elev[ny * W + nx] < bE) { bE = elev[ny * W + nx]; bx = nx; by = ny; }
-        }
-        if (bx < 0) break;
-        cx = bx; cy = by;
-      }
-    }
-  }
-
-  // Render to ImageData
+  const colors = [
+    [26,  58,  90],   // 0:sea
+    [143, 188, 143],  // 1:plain
+    [122, 122, 122],  // 2:mountain
+    [45,  90,  39],   // 3:forest
+    [74,  143, 181],  // 4:river
+  ];
   const img = new ImageData(W, H);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const i = (y * W + x) * 4;
-    const e = elev[y * W + x];
-    let r, g, b;
-    if (e <= seaT) { r = 26; g = 58; b = 90; }
-    else if (mtnScore[y * W + x] >= mtnT2 && mtnScore[y * W + x] > 0.1) { r = 122; g = 122; b = 122; }
-    else if (riverSet.has(`${x},${y}`)) { r = 74; g = 143; b = 181; }
-    else if (humid[y * W + x] >= fT) { r = 45; g = 90; b = 39; }
-    else { r = 143; g = 188; b = 143; }
-    img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+  for (let i = 0; i < W * H; i++) {
+    const [r, g, b] = colors[terrain[i]];
+    img.data[i*4]   = r;
+    img.data[i*4+1] = g;
+    img.data[i*4+2] = b;
+    img.data[i*4+3] = 255;
   }
   return img;
 }
 
-// === Utility ===
-function buildOctaves(W, H) {
-  const m = Math.max(W, H);
-  return [{ s: m * .5, a: .4 }, { s: m * .25, a: .25 }, { s: m * .12, a: .15 }, { s: m * .06, a: .1 }, { s: m * .03, a: .05 }, { s: m * .015, a: .03 }, { s: m * .007, a: .02 }];
+// ========== Core pipeline ==========
+
+function runPipeline(W, H, shape, seaPct, mountainPct, forestDensity, riverDensity, seed, isPreview) {
+  const octaves = isPreview ? 4 : 6;
+
+  // 1. 標高マップ（ドメインワーピング付きFBM）
+  const elev = buildElevation(W, H, shape, seed, octaves);
+
+  // 2. 海レベル（パーセンタイル）
+  const seaLevel = percentile(elev, seaPct / 100);
+
+  // 3. 初期地形 sea/plain
+  const T = new Uint8Array(W * H); // 0=sea 1=plain 2=mountain 3=forest 4=river
+  for (let i = 0; i < W * H; i++) T[i] = elev[i] <= seaLevel ? 0 : 1;
+
+  // 4. 山岳（勾配×標高スコア）
+  if (mountainPct > 0) applyMountains(T, elev, W, H, mountainPct, seed);
+
+  // 5. 森林（湿度モデル）
+  applyForest(T, elev, W, H, forestDensity, seaLevel, seed, isPreview);
+
+  // 6. 川（Watershed法）
+  if (riverDensity !== 'なし') applyRivers(T, elev, W, H, riverDensity, seed, isPreview);
+
+  // 7. 孤立タイル除去
+  postProcess(T, W, H);
+
+  return { terrain: T };
 }
 
-function edgeFade(x, y, W, H, shape) {
-  const fadeMap = { '群島': 3, 'パンゲア': 8, '大陸': 5, '内海': 5, '大陸+島': 4, 'フラクタル': 2 };
-  const fd = fadeMap[shape] || 5;
-  const d = Math.min(x, y, W - 1 - x, H - 1 - y) / fd;
-  const t = Math.max(0, Math.min(1, d));
-  return t * t * (3 - 2 * t);
+// ========== 1. 標高生成 ==========
+
+function buildElevation(W, H, shape, seed, octaves) {
+  const elev = new Float32Array(W * H);
+
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const nx = x / W, ny = y / H;
+
+    // 第1層ワーピング
+    const wx1 = fbm(nx * 4 + 1.7, ny * 4 + 9.2, seed,      3) * 0.35;
+    const wy1 = fbm(nx * 4 + 8.3, ny * 4 + 2.8, seed + 1,  3) * 0.35;
+    // 第2層ワーピング（ワープのワープ）→ 細かい凸凹
+    const wx2 = fbm(nx * 8 + wx1 + 3.1, ny * 8 + wy1 + 7.4, seed + 2, 2) * 0.15;
+    const wy2 = fbm(nx * 8 + wx1 + 6.9, ny * 8 + wy1 + 1.3, seed + 3, 2) * 0.15;
+
+    const warpedX = nx + wx1 + wx2;
+    const warpedY = ny + wy1 + wy2;
+
+    // 本体FBM標高
+    let v = fbm(warpedX * 5, warpedY * 5, seed + 10, octaves);
+
+    // 形状マスク（ソフト誘導のみ、強制しない）
+    v = applyShapeMask(v, nx, ny, W, H, shape, seed);
+
+    elev[y * W + x] = v;
+  }
+
+  return elev;
 }
 
-function shapeMask(x, y, w, h, shape, seed) {
-  const nx = x / w - .5, ny = y / h - .5, dist = Math.sqrt(nx * nx + ny * ny) * 2;
-  const warp = vNoise(x / (w * .3), y / (h * .3), seed + 9999) * .3;
+function applyShapeMask(v, nx, ny, W, H, shape, seed) {
+  const cx = nx - 0.5, cy = ny - 0.5;
+  const dist = Math.sqrt(cx * cx + cy * cy) * 2; // 0〜√2
+
+  // 海岸線用ノイズ（shape maskに凸凹を加える）
+  const coastNoise = fbm(nx * 6 + 2.1, ny * 6 + 5.3, seed + 99, 3) * 0.45;
+
+  let mask;
   switch (shape) {
-    case '大陸': return Math.max(0, 1.2 - (dist + warp) * 1.5);
-    case '群島': return .6 + warp * .8;
-    case 'パンゲア': return Math.max(0, 1.5 - (dist + warp * .5) * 1.2);
-    case '内海': return Math.max(0, 1 - Math.abs(dist - .35) * 3 + warp * .5);
-    case '大陸+島': return Math.max(0, 1 - (dist + warp * .3) * 1.3) + warp * .4;
-    case 'フラクタル': return .5 + warp * 1.2;
-    default: return 1;
+    case '大陸':
+      mask = Math.max(0.05, 1.1 - (dist + coastNoise * 0.5) * 1.5);
+      break;
+    case 'パンゲア':
+      mask = Math.max(0.05, 1.4 - (dist + coastNoise * 0.3) * 1.1);
+      break;
+    case '群島':
+      // 全体的に低め、ノイズで島を散らす
+      mask = 0.35 + coastNoise * 1.1;
+      break;
+    case '内海':
+      // 端が陸、中央が海のリング形状
+      mask = Math.max(0.05, 0.9 - Math.abs(dist - 0.5) * 2.8 + coastNoise * 0.6);
+      break;
+    case '大陸+島':
+      // 大陸マスク＋島ノイズを合成
+      { const cont = Math.max(0, 1.0 - (dist + coastNoise * 0.2) * 1.4);
+        const isle = Math.max(0, coastNoise * 0.9 - 0.25);
+        mask = Math.max(cont, isle); }
+      break;
+    case 'フラクタル':
+      // マスクほぼ無効、ノイズに任せる
+      mask = 0.25 + coastNoise * 1.5;
+      break;
+    default:
+      mask = 1;
+  }
+
+  // ミックス：ハードカットではなくソフトブレンド
+  // maskが0.5以上なら地形を底上げ、0以下なら引き下げ
+  return v * 0.5 + v * mask * 0.5 + (mask - 0.5) * 0.3;
+}
+
+// ========== 2. 山岳（勾配×標高） ==========
+
+function applyMountains(T, elev, W, H, mountainPct, seed) {
+  // 勾配マグニチュード計算
+  const grad = new Float32Array(W * H);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    if (T[y * W + x] === 0) continue;
+    const gx = (elev[y * W + (x+1)] - elev[y * W + (x-1)]) * 0.5;
+    const gy = (elev[(y+1) * W + x] - elev[(y-1) * W + x]) * 0.5;
+    grad[y * W + x] = Math.sqrt(gx * gx + gy * gy);
+  }
+
+  // 山スコア = 標高 × 勾配 → 「高くて急峻な場所」が山
+  const score = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    if (T[i] === 0) continue;
+    // 高標高ボーナス
+    const elevNorm = Math.max(0, elev[i]);
+    score[i] = elevNorm * grad[i];
+  }
+
+  // 陸地タイルのみでパーセンタイル計算
+  const landScores = [];
+  for (let i = 0; i < W * H; i++) if (T[i] !== 0 && score[i] > 0) landScores.push(score[i]);
+  landScores.sort((a, b) => a - b);
+
+  let totalLand = 0;
+  for (let i = 0; i < W * H; i++) if (T[i] !== 0) totalLand++;
+  const targetMtn = Math.floor(totalLand * mountainPct / 100);
+  const thresh = landScores.length > 0
+    ? landScores[Math.max(0, landScores.length - targetMtn)]
+    : Infinity;
+
+  for (let i = 0; i < W * H; i++) {
+    if (T[i] !== 0 && score[i] >= thresh && score[i] > 0) T[i] = 2;
+  }
+
+  // 孤立1タイルの山を除去（地形と馴染ませる）
+  smoothMountains(T, W, H);
+}
+
+function smoothMountains(T, W, H) {
+  const tmp = new Uint8Array(T);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    if (T[y * W + x] !== 2) continue;
+    let mtn = 0;
+    for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0]]) {
+      if (T[(y+dy)*W+(x+dx)] === 2) mtn++;
+    }
+    if (mtn === 0) tmp[y * W + x] = 1; // 孤立山 → 平地
+  }
+  T.set(tmp);
+}
+
+// ========== 3. 森林（湿度モデル） ==========
+
+function applyForest(T, elev, W, H, forestDensity, seaLevel, seed, isPreview) {
+  if (forestDensity === 'なし') return;
+  const densMap = { '小': 0.12, '中': 0.28, '大': 0.50 };
+  const targetPct = densMap[forestDensity] || 0;
+
+  // BFS による海からの距離
+  const seaDist = computeSeaDist(T, W, H);
+  let maxDist = 0;
+  for (let i = 0; i < W * H; i++) if (T[i] !== 0 && seaDist[i] < Infinity) maxDist = Math.max(maxDist, seaDist[i]);
+
+  const moisture = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (T[i] === 0 || T[i] === 2) continue;
+
+    // 海からの距離（近いほど湿潤）
+    const distF = maxDist > 0 ? 1 - Math.min(1, seaDist[i] / maxDist) : 0.5;
+    // 標高（高いほど乾燥）
+    const elevF = 1 - Math.max(0, (elev[i] - seaLevel) / Math.max(0.01, 1 - seaLevel));
+    // ノイズ（ドメインワーピングで自然なパッチ状に）
+    const nx = x / W, ny = y / H;
+    const warpX = fbm(nx * 3 + 1.3, ny * 3 + 4.7, seed + 400, 3) * 0.3;
+    const warpY = fbm(nx * 3 + 7.2, ny * 3 + 2.1, seed + 401, 3) * 0.3;
+    const noiseV = fbm(nx * 5 + warpX, ny * 5 + warpY, seed + 500, isPreview ? 3 : 4);
+
+    moisture[i] = distF * 0.35 + elevF * 0.25 + noiseV * 0.40;
+  }
+
+  // 平地タイルのみのパーセンタイル
+  const plainMoist = [];
+  for (let i = 0; i < W * H; i++) if (T[i] === 1) plainMoist.push(moisture[i]);
+  plainMoist.sort((a, b) => a - b);
+  const thresh = plainMoist[Math.floor(plainMoist.length * (1 - targetPct))] ?? Infinity;
+
+  for (let i = 0; i < W * H; i++) {
+    if (T[i] === 1 && moisture[i] >= thresh) T[i] = 3;
   }
 }
 
-function ridgeNoise(x, y, seed) {
-  let v = vNoise(x, y, seed);
-  v = 1 - Math.abs(v * 2 - 1);
-  return v * v;
+function computeSeaDist(T, W, H) {
+  const dist = new Float32Array(W * H).fill(Infinity);
+  const q = [];
+  let qi = 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (T[y * W + x] === 0) { dist[y * W + x] = 0; q.push(y * W + x); }
+  }
+  while (qi < q.length) {
+    const i = q[qi++];
+    const x = i % W, y = (i - x) / W;
+    const d = dist[i];
+    for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0]]) {
+      const nx = x+dx, ny = y+dy;
+      if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+      const ni = ny * W + nx;
+      if (dist[ni] > d + 1) { dist[ni] = d + 1; q.push(ni); }
+    }
+  }
+  return dist;
 }
 
-function vNoise(x, y, seed) {
-  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
-  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
-  return lerp(lerp(hash(x0, y0, seed), hash(x0 + 1, y0, seed), sx), lerp(hash(x0, y0 + 1, seed), hash(x0 + 1, y0 + 1, seed), sx), sy);
+// ========== 4. 川（Watershed法） ==========
+
+function applyRivers(T, elev, W, H, riverDensity, seed, isPreview) {
+  // 1. 凹地補填（全川が海まで流れるよう保証）
+  const filled = isPreview ? elev : fillDepressions(elev, T, W, H);
+
+  // 2. D8流向（8方向で最低標高へ）
+  const flowDir = computeFlowDir(filled, W, H);
+
+  // 3. 流量蓄積
+  const flowAcc = computeFlowAcc(flowDir, W, H);
+
+  // 4. 閾値以上を川に
+  const densMap = { '小': 0.0018, '中': 0.004, '大': 0.009 };
+  const ratio = densMap[riverDensity] || 0.004;
+  // 陸地数の比率で閾値決定
+  let landCount = 0;
+  for (let i = 0; i < W * H; i++) if (T[i] !== 0) landCount++;
+  const thresh = Math.max(10, Math.floor(landCount * ratio));
+
+  for (let i = 0; i < W * H; i++) {
+    if (T[i] !== 0 && T[i] !== 2 && flowAcc[i] >= thresh) T[i] = 4;
+  }
+
+  // 5. 山を通過する川を除去（山の上に川は不自然）
+  for (let i = 0; i < W * H; i++) {
+    if (T[i] === 4) {
+      // 流量が少なすぎる川を除去（ノイズ対策）
+      if (flowAcc[i] < thresh * 1.5 && T[i] === 4) {
+        // 隣接川がなければ除去
+        const x = i % W, y = (i - x) / W;
+        let riverNeighbor = 0;
+        for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0]]) {
+          const nx = x+dx, ny = y+dy;
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+          if (T[ny*W+nx] === 4) riverNeighbor++;
+        }
+        if (riverNeighbor === 0) T[i] = T[i] === 4 ? 1 : T[i];
+      }
+    }
+  }
 }
-function hash(x, y, s) { let h = s + x * 374761393 + y * 668265263; h = (h ^ (h >> 13)) * 1274126177; h = h ^ (h >> 16); return (h & 0x7fffffff) / 0x7fffffff; }
+
+function fillDepressions(elev, T, W, H) {
+  // Planchon-Darboux 簡易版
+  const INF = 999.0;
+  const filled = Float32Array.from(elev);
+
+  // 海タイルと端隣接タイルは実際の標高
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (T[i] === 0) { filled[i] = elev[i]; continue; }
+    let border = (x === 0 || x === W-1 || y === 0 || y === H-1);
+    if (!border) {
+      for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0]]) {
+        if (T[(y+dy)*W+(x+dx)] === 0) { border = true; break; }
+      }
+    }
+    filled[i] = border ? elev[i] : INF;
+  }
+
+  // 収束するまで繰り返し
+  let changed = true, iter = 0;
+  while (changed && iter < 60) {
+    changed = false; iter++;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (T[i] === 0) continue;
+      for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0]]) {
+        const nx = x+dx, ny = y+dy;
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+        const ni = ny * W + nx;
+        const candidate = filled[ni] + 0.0001;
+        if (candidate < INF && candidate < filled[i] && candidate > elev[i]) {
+          filled[i] = candidate; changed = true;
+        } else if (filled[ni] < INF && filled[i] > filled[ni] + 0.0001 && elev[i] <= filled[ni] + 0.0001) {
+          filled[i] = Math.max(elev[i], filled[ni] + 0.0001); changed = true;
+        }
+      }
+    }
+  }
+  return filled;
+}
+
+function computeFlowDir(elev, W, H) {
+  // 8方向 D8
+  const DIRS8 = [[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]];
+  const dir = new Int8Array(W * H).fill(-1);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    let minE = elev[i], best = -1;
+    for (let d = 0; d < 8; d++) {
+      const [dx, dy] = DIRS8[d];
+      const nx = x+dx, ny = y+dy;
+      if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+      const ne = elev[ny * W + nx];
+      if (ne < minE) { minE = ne; best = d; }
+    }
+    dir[i] = best;
+  }
+  return dir;
+}
+
+function computeFlowAcc(flowDir, W, H) {
+  const DIRS8 = [[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]];
+  const acc = new Int32Array(W * H).fill(1);
+
+  // 入次数計算
+  const inDeg = new Int32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const d = flowDir[y * W + x];
+    if (d < 0) continue;
+    const [dx, dy] = DIRS8[d];
+    const nx = x+dx, ny = y+dy;
+    if (nx >= 0 && nx < W && ny >= 0 && ny < H) inDeg[ny * W + nx]++;
+  }
+
+  // トポロジカルソート（Kahn法）
+  const q = [];
+  let qi = 0;
+  for (let i = 0; i < W * H; i++) if (inDeg[i] === 0) q.push(i);
+
+  while (qi < q.length) {
+    const i = q[qi++];
+    const d = flowDir[i];
+    if (d < 0) continue;
+    const x = i % W, y = (i - x) / W;
+    const [dx, dy] = DIRS8[d];
+    const nx = x+dx, ny = y+dy;
+    if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+    const ni = ny * W + nx;
+    acc[ni] += acc[i];
+    if (--inDeg[ni] === 0) q.push(ni);
+  }
+  return acc;
+}
+
+// ========== 5. 後処理 ==========
+
+function postProcess(T, W, H) {
+  const tmp = new Uint8Array(T);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 1; y < H-1; y++) for (let x = 1; x < W-1; x++) {
+      const t = T[y * W + x];
+      if (t === 4) continue; // 川はそのまま
+      const cnt = [0,0,0,0,0];
+      for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0],[-1,-1],[-1,1],[1,-1],[1,1]]) {
+        cnt[T[(y+dy)*W+(x+dx)]]++;
+      }
+      if (cnt[t] <= 1) {
+        // 孤立タイル → 多数派（川以外）に変換
+        let best = t, bc = -1;
+        for (let k = 0; k < 4; k++) { if (cnt[k] > bc) { bc = cnt[k]; best = k; } }
+        tmp[y * W + x] = best;
+      }
+    }
+    T.set(tmp);
+  }
+}
+
+// ========== ユーティリティ ==========
+
+function fbm(x, y, seed, octaves) {
+  let v = 0, amp = 0.5, freq = 1, total = 0;
+  for (let o = 0; o < octaves; o++) {
+    v     += vNoise(x * freq, y * freq, seed + o * 137) * amp;
+    total += amp;
+    amp   *= 0.5;
+    freq  *= 2.0;
+  }
+  return v / total;
+}
+
+function percentile(arr, p) {
+  const sorted = Float32Array.from(arr).sort();
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+}
+
+function vNoise(x, y, s) {
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const fx = x - x0, fy = y - y0;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  return lerp(
+    lerp(hash(x0,   y0,   s), hash(x0+1, y0,   s), sx),
+    lerp(hash(x0,   y0+1, s), hash(x0+1, y0+1, s), sx),
+    sy
+  );
+}
+function hash(x, y, s) {
+  let h = (s|0) + x * 374761393 + y * 668265263;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = h ^ (h >>> 16);
+  return (h & 0x7fffffff) / 0x7fffffff;
+}
 function lerp(a, b, t) { return a + (b - a) * t; }
-function makeRng(s) { s = s || 12345; return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }; }

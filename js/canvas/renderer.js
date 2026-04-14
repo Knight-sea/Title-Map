@@ -38,7 +38,7 @@ if(scale>8){ctx.strokeStyle=GRID_COLOR;ctx.lineWidth=.5;
 for(let y=range.y0;y<=range.y1+1;y++){const sy=(y-cam.y)*scale;ctx.beginPath();ctx.moveTo((range.x0-cam.x)*scale,sy);ctx.lineTo((range.x1+1-cam.x)*scale,sy);ctx.stroke();}
 for(let x=range.x0;x<=range.x1+1;x++){const sx=(x-cam.x)*scale;ctx.beginPath();ctx.moveTo(sx,(range.y0-cam.y)*scale);ctx.lineTo(sx,(range.y1+1-cam.y)*scale);ctx.stroke();}}
 
-// Cell borders
+// Cell borders（黒で視認性向上）
 if(ui.showCellBorders&&state.cellRegions.size>0&&scale>3)this._drawCB(ctx,state,range,scale);
 
 // Territory borders
@@ -56,9 +56,24 @@ if(ui.mode==='cell')this._drawCP(ctx,state,range,scale);
 if(ui.showLabels&&scale>10)this._drawLB(ctx,state,range,scale);
 }
 
-_drawCB(ctx,s,range,sc){const cam=this.camera;ctx.strokeStyle=s.locked?'rgba(200,180,80,0.4)':'rgba(255,220,80,0.55)';ctx.lineWidth=1;if(!s.locked)ctx.setLineDash([3,3]);
-for(let y=range.y0;y<=range.y1;y++)for(let x=range.x0;x<=range.x1;x++){const cid=s.cells[y][x].cellId;if(!cid)continue;const sx=(x-cam.x)*sc,sy=(y-cam.y)*sc;
-for(const[dx,dy,x1,y1,x2,y2]of this._dirs(sx,sy,sc)){const nx=x+dx,ny=y+dy;const nc=(nx>=0&&nx<s.mapWidth&&ny>=0&&ny<s.mapHeight)?s.cells[ny][nx].cellId:null;if(nc!==cid){ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}}}ctx.setLineDash([]);}
+// セル線：黒系に変更（固定前=半透明黒、固定後=不透明黒）
+_drawCB(ctx,s,range,sc){
+  const cam=this.camera;
+  // 固定前：破線の半透明黒　固定後：実線の黒
+  ctx.strokeStyle=s.locked?'rgba(0,0,0,0.55)':'rgba(0,0,0,0.45)';
+  ctx.lineWidth=sc>12?1.5:1;
+  if(!s.locked)ctx.setLineDash([3,3]);
+  for(let y=range.y0;y<=range.y1;y++)for(let x=range.x0;x<=range.x1;x++){
+    const cid=s.cells[y][x].cellId;if(!cid)continue;
+    const sx=(x-cam.x)*sc,sy=(y-cam.y)*sc;
+    for(const[dx,dy,x1,y1,x2,y2]of this._dirs(sx,sy,sc)){
+      const nx=x+dx,ny=y+dy;
+      const nc=(nx>=0&&nx<s.mapWidth&&ny>=0&&ny<s.mapHeight)?s.cells[ny][nx].cellId:null;
+      if(nc!==cid){ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
+    }
+  }
+  ctx.setLineDash([]);
+}
 
 _drawTB(ctx,s,range,sc,vl){const cam=this.camera;
 for(let y=range.y0;y<=range.y1;y++)for(let x=range.x0;x<=range.x1;x++){const tid=s.cells[y][x].territoryId;if(!tid)continue;const sx=(x-cam.x)*sc,sy=(y-cam.y)*sc;

@@ -109,7 +109,6 @@ function initInput(canvas){
   canvas.addEventListener('mousedown',e=>{
     const s=getState(),r=canvas.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top,cell=camera.screenToCell(mx,my);
 
-    // Right/middle = always pan (except creation right-click = deselect, invasion right = remove)
     if(e.button===2){e.preventDefault();
       if(s.ui.mode==='creation'){creationRight(cell.x,cell.y);dragMode='remove';painting=true;return;}
       if(s.ui.mode==='invasion'){doInvasion(cell.x,cell.y,2);dragMode='remove';painting=true;return;}
@@ -117,7 +116,6 @@ function initInput(canvas){
       panning=true;lx=e.clientX;ly=e.clientY;canvas.style.cursor='grabbing';return;}
     if(e.button===1){e.preventDefault();panning=true;lx=e.clientX;ly=e.clientY;canvas.style.cursor='grabbing';return;}
 
-    // Left
     if(e.button===0){
       if(s.ui.mode==='terrain'){terrainPaint(cell.x,cell.y);painting=true;}
       else if(s.ui.mode==='cell'){cellPaint(cell.x,cell.y);painting=true;}
@@ -215,6 +213,15 @@ function doUndo(){if(undo()){renderTree();renderPlayerList();renderEditor();rend
 
 // ===== Toolbar =====
 function initToolbar(){
+  // ★ スロット選択画面に戻るボタン
+  document.getElementById('btn-home').onclick=()=>{
+    if(confirm('スロット選択画面に戻りますか？\n（未保存の変更は失われます）')){
+      if(renderer){renderer.stop();}
+      buildSlots();
+      showScreen('slot-screen');
+    }
+  };
+
   document.querySelectorAll('.brush-btn').forEach(btn=>{btn.onclick=()=>{const t=btn.dataset.terrain;if(getState().ui.selectedTerrain===t){deselectBrush();return;}document.querySelectorAll('.brush-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');setUI({mode:'terrain',selectedTerrain:t});};});
   document.getElementById('brush-size').onchange=e=>setUI({brushSize:+e.target.value});
   document.getElementById('btn-save').onclick=openSaveModal;
