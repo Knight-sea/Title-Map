@@ -1,0 +1,48 @@
+/* =============================================
+   ツリー ドラッグ＆ドロップ バー
+   ============================================= */
+
+/* 前挿入バー：通常は透明な当たり判定ゾーン */
+.tree-drop-bar {
+  height: 6px;
+  margin: 0;
+  border-radius: 3px;
+  cursor: default;
+  position: relative;
+  transition: background 0.1s;
+  /* 中央に細い線を常時表示（薄く） */
+}
+.tree-drop-bar::after {
+  content: '';
+  display: block;
+  position: absolute;
+  left: 4px; right: 4px;
+  top: 50%; transform: translateY(-50%);
+  height: 1px;
+  background: var(--border-light);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+/* ドラッグオーバー時：太い青バーで挿入位置を明示 */
+.tree-drop-bar.active {
+  background: rgba(74,144,217,0.15);
+}
+.tree-drop-bar.active::after {
+  opacity: 1;
+  height: 3px;
+  background: var(--primary);
+  left: 0; right: 0;
+}
+
+/* ドラッグ中のアイテム */
+.tree-item.dragging {
+  opacity: 0.4;
+}
+
+/* 子にする対象のハイライト */
+.tree-item.drop-target {
+  background: var(--bg-hover);
+  outline: 1px dashed var(--primary);
+}

@@ -7,13 +7,21 @@
 <div id="size-screen" class="screen"><div class="size-container"><h2>マップサイズ選択</h2><div class="size-select-row"><label>幅 × 高さ</label><select id="map-size-select"></select></div><div id="size-preview" class="size-preview"></div><div class="size-actions"><button class="btn btn-secondary" id="size-back">戻る</button><button class="btn btn-primary" id="size-manual">手動で作成</button><button class="btn btn-accent" id="size-auto">自動生成</button></div></div></div>
 
 <div id="gen-screen" class="screen"><div class="gen-container"><h2>マップ自動生成</h2><div class="gen-body"><div class="gen-params">
-<div class="form-group"><label>マップの形</label><select id="gen-shape"><option>大陸</option><option>群島</option><option>パンゲア</option><option>内海</option><option>大陸+島</option><option>フラクタル</option></select></div>
+<div class="form-group"><label>マップの形</label><select id="gen-shape">
+  <option>大陸</option>
+  <option>群島</option>
+  <option>パンゲア</option>
+  <option>内海</option>
+  <option>大陸+島</option>
+  <option>フラクタル</option>
+  <option>地球</option>
+</select></div>
 <div class="form-group"><label>海の割合 <span id="gen-sea-val">30%</span></label><input type="range" id="gen-sea" min="0" max="100" step="5" value="30"></div>
 <div class="form-group"><label>山の割合 <span id="gen-mtn-val">10%</span></label><input type="range" id="gen-mtn" min="0" max="100" step="5" value="10"></div>
 <div class="form-group"><label>森の密度</label><select id="gen-forest"><option>なし</option><option>小</option><option selected>中</option><option>大</option></select></div>
 <div class="form-group"><label>川の量</label><select id="gen-river"><option>なし</option><option selected>小</option><option>中</option><option>大</option></select></div>
 <div class="gen-seed-row"><button class="btn btn-small btn-secondary" id="gen-reseed">🔄 再生成</button></div>
-</div><div class="gen-preview-wrap"><canvas id="gen-preview" width="200" height="200" style="width:200px;height:200px;image-rendering:pixelated"></canvas></div></div>
+</div><div class="gen-preview-wrap"><canvas id="gen-preview" width="200" height="200" style="width:200px;height:200px;image-rendering:pixelated;border:1px solid var(--border);border-radius:4px"></canvas></div></div>
 <div class="gen-actions"><button class="btn btn-secondary" id="gen-back">戻る</button><button class="btn btn-primary" id="gen-confirm">決定</button></div></div></div>
 
 <div id="editor-screen" class="screen">
@@ -33,7 +41,18 @@
 <div class="tool-group" id="cell-group">
 <button class="btn-tool" id="btn-cell-mode" title="セル塗り (C)">セル塗り</button><div class="topbar-divider"></div>
 <label class="toolbar-label">自動セル</label>
-<select id="auto-cell-size" class="toolbar-select"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="7">7</option><option value="10">10</option><option value="15">15</option><option value="20">20</option></select>
+<!-- サイズ: 2,4,6,8,10,14,18,24,30 -->
+<select id="auto-cell-size" class="toolbar-select">
+  <option value="2">2</option>
+  <option value="4">4</option>
+  <option value="6">6</option>
+  <option value="8">8</option>
+  <option value="10" selected>10</option>
+  <option value="14">14</option>
+  <option value="18">18</option>
+  <option value="24">24</option>
+  <option value="30">30</option>
+</select>
 <button class="btn-tool" id="btn-auto-cell">自動生成</button><div class="topbar-divider"></div></div>
 <button class="btn-tool" id="btn-lock" title="固定 (L)">🔒 固定</button><div class="topbar-divider"></div>
 <label class="toolbar-label">階層</label>
@@ -61,7 +80,6 @@
 
 <div id="settings-modal" class="modal" hidden><div class="modal-content"><h3>設定</h3><div class="form-group"><label>SoundCloud URL</label><input type="text" id="soundcloud-url" placeholder="https://soundcloud.com/..."></div><div class="modal-actions"><button class="btn btn-secondary" id="settings-cancel">キャンセル</button><button class="btn btn-primary" id="settings-save">保存</button></div></div></div>
 
-<!-- セーブモーダル：スロット選択を追加 -->
 <div id="save-modal" class="modal" hidden><div class="modal-content"><h3>セーブ</h3>
 <div class="form-group"><label>スロット名</label><input type="text" id="save-slot-name"></div>
 <div class="form-group"><label>保存先スロット</label><select id="save-slot-select"></select></div>
@@ -71,29 +89,22 @@
 
 <div id="help-modal" class="modal" hidden><div class="modal-content help-content"><h3>操作方法・ショートカット</h3>
 <div class="help-section"><h4>マップ操作</h4><table class="help-table">
-<tr><td>右ドラッグ / 中ドラッグ</td><td>マップ移動（全モード共通）</td></tr>
+<tr><td>右ドラッグ / 中ドラッグ</td><td>マップ移動</td></tr>
 <tr><td>WASD / ↑↓←→</td><td>スムーズスクロール</td></tr>
 <tr><td>ホイール</td><td>ズーム</td></tr>
 <tr><td>Ctrl+0</td><td>全体表示</td></tr>
-<tr><td>マップ左クリック（通常モード）</td><td>領地を選択しツリーにフォーカス</td></tr></table></div>
+<tr><td>左クリック（通常）</td><td>領地を選択・ツリーにフォーカス</td></tr></table></div>
 <div class="help-section"><h4>ツール</h4><table class="help-table">
 <tr><td>1〜5</td><td>地形ブラシ</td></tr>
-<tr><td>[ / ]</td><td>ブラシサイズ変更</td></tr>
+<tr><td>[ / ]</td><td>ブラシサイズ</td></tr>
 <tr><td>C</td><td>セル塗りモード</td></tr>
-<tr><td>Space（セル塗り中）</td><td>次のセル</td></tr>
-<tr><td>L</td><td>固定/解除</td></tr>
-<tr><td>T / B</td><td>地形色 / セル線 表示切替</td></tr></table></div>
-<div class="help-section"><h4>領地</h4><table class="help-table">
-<tr><td>N</td><td>新しい領地</td></tr>
-<tr><td>ツリーでドラッグ</td><td>領地を並べ替え（アイテム上=子にする、上部ゾーン=前に挿入）</td></tr>
-<tr><td>Enter（作成中）</td><td>領地を確定</td></tr>
-<tr><td>Escape</td><td>キャンセル</td></tr></table></div>
-<div class="help-section"><h4>その他</h4><table class="help-table">
-<tr><td>Ctrl+S</td><td>クイックセーブ</td></tr>
-<tr><td>Ctrl+Z</td><td>元に戻す</td></tr>
-<tr><td>Tab</td><td>タブ切替</td></tr>
-<tr><td>🏠</td><td>スロット選択に戻る</td></tr></table></div>
-<div class="help-section"><h4>ワークフロー</h4><p class="help-flow">① 地形を塗る → ② セルを塗る（または自動生成） → ③ 固定 → ④ 領地を作成 → ⑤ 階層・プレイヤーを設定</p></div>
+<tr><td>L / T / B</td><td>固定 / 地形色 / セル線</td></tr></table></div>
+<div class="help-section"><h4>領地ツリー並べ替え</h4><table class="help-table">
+<tr><td>アイテム上部バーへドロップ</td><td>その位置に挿入（前移動）</td></tr>
+<tr><td>アイテム本体へドロップ</td><td>子領地にする</td></tr></table></div>
+<div class="help-section"><h4>セル自動生成サイズ</h4><p class="help-flow">2・4・6・8・10・14・18・24・30 マス（アスペクト比 2.2:1 以下に制限）</p></div>
+<div class="help-section"><h4>マップ形状</h4><table class="help-table">
+<tr><td>地球</td><td>4大陸＋島嶼群、外縁は海</td></tr></table></div>
 <div class="modal-actions"><button class="btn btn-primary" id="help-close">閉じる</button></div></div></div>
 
 <script type="module" src="js/main.js"></script>
