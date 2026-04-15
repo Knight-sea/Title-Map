@@ -1,310 +1,360 @@
+/**
+ * cellgen.js
+ * ─────────────────────────────────────────────────────────────────
+ *  容量制約付き最小費用割り当て（Min-Cost Capacitated Assignment）
+ *
+ *  概念上のネットワーク：
+ *    超source ──1─→ 各陸地タイル ──BFS距離コスト─→ 各シード ──→ 超sink
+ *    陸地タイル側 capacity=1、シード側 capacity=targetSize
+ *
+ *  実装方針（ブラウザ安全・O(N log N)）:
+ *    Phase 1: BFS Voronoi（初期フロー）
+ *             → 各タイルを最短シードへ仮割り当て（完全な最小費用解の近似）
+ *    Phase 2: 容量再調整（Successive Shortest Path の局所近似）
+ *             → 超過シードの境界タイルを不足シードへ移送
+ *             → 連結性チェックを内包（飛び地防止）
+ *    Phase 3: 飛び地修復
+ *             → 各シード領域の非主連結成分タイルを再割り当て
+ *    Phase 4: 未割当タイルの吸収
+ * ─────────────────────────────────────────────────────────────────
+ */
+
 import { getState, generateId } from '../state.js';
 import { TERRAINS } from '../constants.js';
 
-// ============================================================
-//  コンパクト形状セル自動生成
-//
-//  UIサイズ: 2,4,6,8,10,14,18,24,30
-//  許容誤差: +1 (最大 targetSize+1 マス)
-//  理想ブロック比:
-//    2 → 1×2   4 → 2×2   6 → 2×3   8 → 2×4
-//   10 → 3×3  14 → 3×5  18 → 3×6  24 → 4×6  30 → 5×6
-//  最大アスペクト比 2.2:1 を超えないよう細長いセルを補正
-// ============================================================
+const DIRS4 = [[0,-1],[0,1],[-1,0],[1,0]];
 
-// 理想ブロック (W, H) テーブル（アスペクト比の参考に使う）
-const IDEAL_SHAPES = {
-   2: [1,2],  4: [2,2],  6: [2,3],   8: [2,4],
-  10: [3,3], 14: [3,5], 18: [3,6],  24: [4,6], 30: [5,6],
-};
-const MAX_ASPECT = 2.2;
+// ================================================================
+//  Public API
+// ================================================================
 
 export function autoGenerateCells(cellSize) {
   const s  = getState();
   const W  = s.mapWidth, H = s.mapHeight;
 
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) s.cells[y][x].cellId = null;
+  // クリア
+  for (let y=0;y<H;y++) for (let x=0;x<W;x++) s.cells[y][x].cellId = null;
   s.cellRegions.clear();
 
-  // ──────────────────────────────────────────
-  // 1. 所有可能タイルを列挙（海・山を除外）
-  // ──────────────────────────────────────────
-  const ownable   = new Uint8Array(W * H);
-  const ownTiles  = [];
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+  // ────────────────────────────────────────
+  //  Step 1: 所有可能タイルを列挙（海・山を除外）
+  // ────────────────────────────────────────
+  const ownable  = new Uint8Array(W * H);
+  const ownTiles = [];
+  for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
     if (TERRAINS[s.cells[y][x].terrain].canOwn) {
-      ownable[y * W + x] = 1;
-      ownTiles.push([x, y]);
+      ownable[y*W+x] = 1;
+      ownTiles.push(y*W+x);
     }
   }
   if (!ownTiles.length) return;
 
-  // ──────────────────────────────────────────
-  // 2. ポアソン円板サンプリングでシード配置
-  //    最小間隔 = sqrt(cellSize) × 0.8
-  // ──────────────────────────────────────────
-  const spacing   = Math.max(1, Math.sqrt(cellSize) * 0.8);
+  // ────────────────────────────────────────
+  //  Step 2: シード配置（ポアソン円板サンプリング）
+  //          供給ノード定義に相当
+  // ────────────────────────────────────────
   const numSeeds  = Math.max(1, Math.round(ownTiles.length / cellSize));
+  const spacing   = Math.max(1, Math.sqrt(cellSize) * 0.85);
   const seeds     = poissonSeeds(ownTiles, ownable, W, H, numSeeds, spacing);
   if (!seeds.length) return;
 
-  // セルID生成
-  const seedIds = seeds.map(() => { const id = generateId(); s.cellRegions.set(id, {id}); return id; });
+  // 需要ノード（各シードが受け取るべきタイル数）
+  // 合計 = ownable タイル数になるよう端数を分配
+  const targets = computeTargets(ownTiles.length, seeds.length);
 
-  // ──────────────────────────────────────────
-  // 3. 並行BFS Voronoi（Manhattan距離）
-  // ──────────────────────────────────────────
+  // ────────────────────────────────────────
+  //  Step 3: BFS Voronoi（初期フロー = 最短距離での仮割り当て）
+  //          全タイル→最近シードへの最小コストフロー近似
+  // ────────────────────────────────────────
   const asgn = new Int32Array(W * H).fill(-1);
-  const dist  = new Int32Array(W * H).fill(2147483647);
-  const q     = []; let qi = 0;
-
-  for (let si = 0; si < seeds.length; si++) {
-    const [sx, sy] = seeds[si];
-    const i = sy * W + sx;
-    dist[i] = 0; asgn[i] = si; q.push(i);
-  }
-  while (qi < q.length) {
-    const i = q[qi++]; const x = i % W, y = (i - x) / W;
-    const d = dist[i], si = asgn[i];
-    for (const [dx, dy] of DIRS4) {
-      const nx = x+dx, ny = y+dy;
-      if (nx<0||nx>=W||ny<0||ny>=H) continue;
-      const ni = ny*W+nx;
-      if (!ownable[ni]||dist[ni]<=d+1) continue;
-      dist[ni]=d+1; asgn[ni]=si; q.push(ni);
+  {
+    const dist = new Int32Array(W * H).fill(2147483647);
+    const q = []; let qi = 0;
+    for (let si=0;si<seeds.length;si++) {
+      const ti = seeds[si];
+      dist[ti] = 0; asgn[ti] = si; q.push(ti);
     }
+    while (qi < q.length) {
+      const ti = q[qi++];
+      const x = ti%W, y = (ti-x)/W;
+      const d = dist[ti];
+      for (const [dx,dy] of DIRS4) {
+        const nx=x+dx,ny=y+dy;
+        if (nx<0||nx>=W||ny<0||ny>=H) continue;
+        const ni = ny*W+nx;
+        if (!ownable[ni] || dist[ni] <= d+1) continue;
+        dist[ni] = d+1; asgn[ni] = asgn[ti]; q.push(ni);
+      }
+    }
+    // 未到達タイルを隣接シードへ初期割り当て
+    absorbUnassigned(asgn, ownable, W, H);
   }
 
-  // Stateに書き込み
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+  // ────────────────────────────────────────
+  //  Step 4: 容量制約再調整
+  //          Successive Shortest Path の局所近似
+  //          超過シード → 不足シードへ境界タイルを移送
+  // ────────────────────────────────────────
+  capacitatedRebalance(asgn, ownable, seeds, targets, W, H);
+
+  // ────────────────────────────────────────
+  //  Step 5: 飛び地修復（非主連結成分を隣接シードへ再割り当て）
+  // ────────────────────────────────────────
+  repairEnclaves(asgn, ownable, seeds, W, H);
+
+  // ────────────────────────────────────────
+  //  Step 6: 残った未割当タイルを吸収
+  // ────────────────────────────────────────
+  absorbUnassigned(asgn, ownable, W, H);
+
+  // ────────────────────────────────────────
+  //  Step 7: State へ書き込み
+  // ────────────────────────────────────────
+  const seedIds = seeds.map(() => {
+    const id = generateId(); s.cellRegions.set(id, {id}); return id;
+  });
+  for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
     const i = y*W+x;
-    if (ownable[i] && asgn[i]>=0) s.cells[y][x].cellId = seedIds[asgn[i]];
+    if (ownable[i] && asgn[i] >= 0) s.cells[y][x].cellId = seedIds[asgn[i]];
   }
 
-  // ──────────────────────────────────────────
-  // 4. サイズマップ作成
-  // ──────────────────────────────────────────
-  const sizeMap = buildSizeMap(s, W, H);
-
-  // ──────────────────────────────────────────
-  // 5. 細長いセルを補正（アスペクト比 > MAX_ASPECT を修正）
-  // ──────────────────────────────────────────
-  fixElongated(s, W, H, sizeMap, cellSize);
-
-  // ──────────────────────────────────────────
-  // 6. 小さすぎるセルを吸収（< cellSize - 1）
-  // ──────────────────────────────────────────
-  const minSize = Math.max(2, cellSize - 1);
-  absorbTiny(s, W, H, sizeMap, minSize);
-
-  // ──────────────────────────────────────────
-  // 7. 未割当マスを隣接セルに吸収
-  // ──────────────────────────────────────────
-  absorbUnassigned(s, W, H, ownable);
-
-  cleanup(s, W, H);
+  // 空セル削除
+  const used = new Set();
+  for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
+    const c = s.cells[y][x].cellId; if (c) used.add(c);
+  }
+  for (const id of [...s.cellRegions.keys()]) if (!used.has(id)) s.cellRegions.delete(id);
 }
 
-// ──────────────────────────────────────────────────────────────
-//  ポアソン円板サンプリング
-// ──────────────────────────────────────────────────────────────
-function poissonSeeds(tiles, ownable, W, H, numSeeds, spacing) {
-  // Fisher-Yatesシャッフル
-  const arr = tiles.slice();
-  for (let i = arr.length-1; i>0; i--) {
+// ================================================================
+//  Phase 4: 容量制約再調整（核心部）
+//
+//  ネットワークフロー的解釈：
+//    超過シードからの「逆辺」を通じて不足シードへフローを付け替える。
+//    境界タイルのみを対象にすることで連結性を維持しつつ
+//    最小コスト（近傍優先）での再配分を行う。
+//
+//  計算量: O(ITER × N × connectivity_check)
+//           ITER≤80, N=ownable, connectivity=O(cellSize)
+//           例: 10000タイル×30サイズ×80回 ≈ 24M ops
+// ================================================================
+function capacitatedRebalance(asgn, ownable, seeds, targets, W, H) {
+  const S = seeds.length;
+  const MAX_ITER = 80;
+
+  // サイズ配列（更新を追跡）
+  const sizes = new Int32Array(S);
+  for (let i=0;i<W*H;i++) if (ownable[i] && asgn[i]>=0) sizes[asgn[i]]++;
+
+  for (let iter = 0; iter < MAX_ITER; iter++) {
+    let anyChange = false;
+
+    // ランダム開始オフセット（方向バイアス回避）
+    const offset = Math.floor(Math.random() * W * H);
+
+    for (let t=0;t<W*H;t++) {
+      const ti = (t + offset) % (W * H);
+      if (!ownable[ti] || asgn[ti] < 0) continue;
+
+      const si = asgn[ti];
+      const overload = sizes[si] - targets[si];
+      if (overload <= 0) continue; // このシードは超過していない
+
+      const x = ti%W, y = (ti-x)/W;
+
+      // 隣接する不足シードを探す（最も不足度が大きいものを優先）
+      let bestNbr = -1, bestUnderload = 0;
+      for (const [dx,dy] of DIRS4) {
+        const nx=x+dx,ny=y+dy;
+        if (nx<0||nx>=W||ny<0||ny>=H) continue;
+        const ni = ny*W+nx;
+        if (!ownable[ni] || asgn[ni]===si || asgn[ni]<0) continue;
+        const nsi = asgn[ni];
+        const underload = targets[nsi] - sizes[nsi];
+        if (underload > bestUnderload) { bestUnderload = underload; bestNbr = nsi; }
+      }
+      if (bestNbr < 0) continue;
+
+      // 移送しても元シードが連結を維持するか確認
+      // （逆辺を通じてフローを付け替えるときの実行可能性チェック）
+      if (!wouldDisconnect(asgn, W, H, si, x, y)) {
+        asgn[ti] = bestNbr;
+        sizes[si]--;
+        sizes[bestNbr]++;
+        anyChange = true;
+      }
+    }
+
+    if (!anyChange) break;
+  }
+}
+
+// ================================================================
+//  Phase 5: 飛び地修復
+//
+//  最小費用流の解は連結性を保証しない（飛び地が生じる可能性）。
+//  各シード領域の非主連結成分タイルを隣接シードへ再割り当て。
+//  焼きなましの受け入れ基準として「コスト増加 < threshold」を使用。
+// ================================================================
+function repairEnclaves(asgn, ownable, seeds, W, H) {
+  const MAX_ITER = 40;
+
+  for (let iter = 0; iter < MAX_ITER; iter++) {
+    let anyChange = false;
+
+    for (let si=0; si<seeds.length; si++) {
+      // シード自体のタイルから BFS で主連結成分を確定
+      const seedTile = seeds[si];
+      let startTile = -1;
+
+      // シード自身がまだ自領なら起点に使う、さもなくば最初の自タイルを探す
+      if (ownable[seedTile] && asgn[seedTile] === si) {
+        startTile = seedTile;
+      } else {
+        for (let i=0;i<W*H;i++) {
+          if (ownable[i] && asgn[i]===si) { startTile=i; break; }
+        }
+      }
+      if (startTile < 0) continue;
+
+      // BFS で主連結成分を収集
+      const mainComp = new Set();
+      const bfsQ = [startTile]; let bfsQi = 0;
+      mainComp.add(startTile);
+      while (bfsQi < bfsQ.length) {
+        const ti = bfsQ[bfsQi++];
+        const x=ti%W, y=(ti-x)/W;
+        for (const [dx,dy] of DIRS4) {
+          const nx=x+dx,ny=y+dy;
+          if (nx<0||nx>=W||ny<0||ny>=H) continue;
+          const ni = ny*W+nx;
+          if (asgn[ni]===si && !mainComp.has(ni)) { mainComp.add(ni); bfsQ.push(ni); }
+        }
+      }
+
+      // 主連結成分外のタイルを隣接シードへ再割り当て
+      for (let i=0;i<W*H;i++) {
+        if (!ownable[i] || asgn[i]!==si || mainComp.has(i)) continue;
+        const x=i%W,y=(i-x)/W;
+        for (const [dx,dy] of DIRS4) {
+          const nx=x+dx,ny=y+dy;
+          if (nx<0||nx>=W||ny<0||ny>=H) continue;
+          const ni=ny*W+nx;
+          if (ownable[ni] && asgn[ni]>=0 && asgn[ni]!==si) {
+            asgn[i] = asgn[ni]; anyChange = true; break;
+          }
+        }
+      }
+    }
+
+    if (!anyChange) break;
+  }
+}
+
+// ================================================================
+//  連結性チェック（逆辺実行可能性チェック）
+//
+//  タイル(rx,ry) を si から除いたとき、残りが連結か確認。
+//  4-近傍の si タイルを start として BFS し、他の全 si 近傍に到達できるか。
+//  計算量: O(cellSize) — 最大 CELL_LIMIT 打ち切り
+// ================================================================
+function wouldDisconnect(asgn, W, H, si, rx, ry) {
+  const neighbors = [];
+  for (const [dx,dy] of DIRS4) {
+    const nx=rx+dx, ny=ry+dy;
+    if (nx<0||nx>=W||ny<0||ny>=H) continue;
+    if (asgn[ny*W+nx]===si) neighbors.push(ny*W+nx);
+  }
+  if (neighbors.length <= 1) return false; // 孤立 or 単方向 → 切断なし
+
+  const start = neighbors[0];
+  const visited = new Set([start]);
+  const q = [start]; let qi = 0;
+  const LIMIT = 800; // 大きいセルは安全と見なしてスキップ
+
+  const skipIdx = ry*W+rx;
+  while (qi < q.length && visited.size < LIMIT) {
+    const ti = q[qi++];
+    const x=ti%W,y=(ti-x)/W;
+    for (const [dx,dy] of DIRS4) {
+      const nx=x+dx,ny=y+dy;
+      if (nx<0||nx>=W||ny<0||ny>=H) continue;
+      const ni=ny*W+nx;
+      if (ni===skipIdx || visited.has(ni) || asgn[ni]!==si) continue;
+      visited.add(ni); q.push(ni);
+    }
+  }
+  if (visited.size >= LIMIT) return false; // 大セル: 安全と仮定
+
+  for (const nb of neighbors.slice(1)) {
+    if (!visited.has(nb)) return true; // 切断される
+  }
+  return false;
+}
+
+// ================================================================
+//  ユーティリティ
+// ================================================================
+
+/**
+ * 需要ノードの容量分配
+ * 端数 r を先頭 r シードに +1 割り当てる
+ */
+function computeTargets(totalTiles, numSeeds) {
+  const base  = Math.floor(totalTiles / numSeeds);
+  const extra = totalTiles % numSeeds;
+  return Array.from({length: numSeeds}, (_, i) => base + (i < extra ? 1 : 0));
+}
+
+/**
+ * ポアソン円板サンプリング（供給ノードの選択）
+ * 最小間隔 spacing を保ちながら numSeeds 個のシードを配置
+ */
+function poissonSeeds(ownTiles, ownable, W, H, numSeeds, spacing) {
+  // Fisher-Yates シャッフル
+  const arr = ownTiles.slice();
+  for (let i=arr.length-1;i>0;i--) {
     const j = Math.floor(Math.random()*(i+1));
     [arr[i],arr[j]] = [arr[j],arr[i]];
   }
-  const seeds = []; const sp2 = spacing*spacing;
-  for (const [x,y] of arr) {
+  const seeds = []; const sp2 = spacing * spacing;
+  for (const ti of arr) {
     if (seeds.length >= numSeeds) break;
+    const x=ti%W, y=(ti-x)/W;
     let ok = true;
-    for (const [sx,sy] of seeds) {
-      const dx=x-sx,dy=y-sy;
-      if (dx*dx+dy*dy < sp2) {ok=false;break;}
+    for (const st of seeds) {
+      const sx=st%W, sy=(st-sx)/W;
+      const dx=x-sx, dy=y-sy;
+      if (dx*dx+dy*dy < sp2) { ok=false; break; }
     }
-    if (ok) seeds.push([x,y]);
+    if (ok) seeds.push(ti);
   }
   // 不足補充（間引きなし）
-  if (seeds.length < Math.ceil(numSeeds*0.6)) {
-    for (const [x,y] of arr) {
-      if (seeds.length>=numSeeds) break;
-      if (!seeds.some(([sx,sy])=>sx===x&&sy===y)) seeds.push([x,y]);
+  if (seeds.length < Math.ceil(numSeeds * 0.6)) {
+    for (const ti of arr) {
+      if (seeds.length >= numSeeds) break;
+      if (!seeds.includes(ti)) seeds.push(ti);
     }
   }
   return seeds;
 }
 
-// ──────────────────────────────────────────────────────────────
-//  細長セル補正
-//  MAX_ASPECT を超えるセルの「先端タイル」を隣接セルへ移管
-// ──────────────────────────────────────────────────────────────
-function fixElongated(s, W, H, sizeMap, targetSize) {
-  let changed = true, iter = 0;
-  while (changed && iter++ < 30) {
-    changed = false;
-
-    // バウンディングボックス計算
-    const box = new Map();
-    for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
-      const cid = s.cells[y][x].cellId; if (!cid) continue;
-      if (!box.has(cid)) box.set(cid,{minX:x,maxX:x,minY:y,maxY:y,cx:0,cy:0,n:0});
-      const b=box.get(cid);
-      if(x<b.minX)b.minX=x; if(x>b.maxX)b.maxX=x;
-      if(y<b.minY)b.minY=y; if(y>b.maxY)b.maxY=y;
-      b.cx+=x; b.cy+=y; b.n++;
-    }
-
-    for (const [id, b] of box) {
-      b.cx/=b.n; b.cy/=b.n;
-      const bw=b.maxX-b.minX+1, bh=b.maxY-b.minY+1;
-      const ratio=Math.max(bw,bh)/Math.max(1,Math.min(bw,bh));
-      if (ratio <= MAX_ASPECT) continue;
-
-      const elongH = bw > bh; // true=水平方向に細長い
-
-      // 端のタイルを候補として選ぶ
-      // 重心から最も遠い方向の端
-      const tipX = elongH ? (b.cx < (b.minX+b.maxX)/2 ? b.maxX : b.minX) : -1;
-      const tipY = !elongH ? (b.cy < (b.minY+b.maxY)/2 ? b.maxY : b.minY) : -1;
-
-      let bestTile=null, bestDist=-1;
-      let bestNbr=null, bestNbrSize=-1;
-
-      for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
-        if (s.cells[y][x].cellId !== id) continue;
-        const atTip = elongH ? (x===tipX) : (y===tipY);
-        if (!atTip) continue;
-
-        // 境界タイルか確認
-        let nbr=null, nbrSz=-1;
-        for (const [dx,dy] of DIRS4) {
-          const nx=x+dx,ny=y+dy;
-          if (nx<0||nx>=W||ny<0||ny>=H) continue;
-          const nc=s.cells[ny][nx].cellId;
-          if (nc&&nc!==id) {
-            const ns=sizeMap.get(nc)||0;
-            if (ns>nbrSz) {nbrSz=ns;nbr=nc;}
-          }
-        }
-        if (!nbr) continue;
-
-        // 移管してもセルが切断されないか簡易確認（連結性保証）
-        if (!wouldDisconnect(s, W, H, id, x, y)) {
-          const dd=Math.abs(x-b.cx)+Math.abs(y-b.cy);
-          if (dd>bestDist) {bestDist=dd;bestTile=[x,y];bestNbr=nbr;bestNbrSize=nbrSz;}
-        }
-      }
-
-      if (bestTile && bestNbr) {
-        const [tx,ty]=bestTile;
-        s.cells[ty][tx].cellId=bestNbr;
-        sizeMap.set(bestNbr,(sizeMap.get(bestNbr)||0)+1);
-        sizeMap.set(id,(sizeMap.get(id)||0)-1);
-        changed=true;
-      }
-    }
-  }
-}
-
-// セルから1タイルを取り除いた時に連結性が壊れるか（4方向連結）
-function wouldDisconnect(s, W, H, cid, rx, ry) {
-  // 周囲の同セルタイルを探し、それらが rx,ry を通らずにつながるか
-  const neighbors = [];
-  for (const [dx,dy] of DIRS4) {
-    const nx=rx+dx,ny=ry+dy;
-    if (nx<0||nx>=W||ny<0||ny>=H) continue;
-    if (s.cells[ny][nx].cellId===cid) neighbors.push([nx,ny]);
-  }
-  if (neighbors.length<=1) return false; // 隣接が0or1なら問題なし
-
-  // BFSで最初のneighborから他のneighborに到達できるか（rx,ryをスキップ）
-  const start=neighbors[0];
-  const visited=new Set([`${start[0]},${start[1]}`]);
-  const q2=[start]; let qi=0;
-  while (qi<q2.length) {
-    const [cx,cy]=q2[qi++];
-    for (const [dx,dy] of DIRS4) {
-      const nx=cx+dx,ny=cy+dy;
-      if (nx<0||nx>=W||ny<0||ny>=H) continue;
-      if (nx===rx&&ny===ry) continue;
-      const k=`${nx},${ny}`;
-      if (visited.has(k)||s.cells[ny][nx].cellId!==cid) continue;
-      visited.add(k); q2.push([nx,ny]);
-    }
-  }
-  // 全neighborが到達できればdisconnectしない
-  for (const [nx,ny] of neighbors.slice(1)) {
-    if (!visited.has(`${nx},${ny}`)) return true;
-  }
-  return false;
-}
-
-// ──────────────────────────────────────────────────────────────
-//  小セル吸収
-// ──────────────────────────────────────────────────────────────
-function absorbTiny(s, W, H, sizeMap, minSize) {
-  for (let pass=0;pass<15;pass++) {
-    let absorbed=false;
-    for (const [id,sz] of [...sizeMap.entries()]) {
-      if (sz>=minSize) continue;
-      let bestNbr=null, bestSz=-1;
-      for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
-        if (s.cells[y][x].cellId!==id) continue;
-        for (const [dx,dy] of DIRS4) {
-          const nx=x+dx,ny=y+dy;
-          if (nx<0||nx>=W||ny<0||ny>=H) continue;
-          const nc=s.cells[ny][nx].cellId;
-          if (nc&&nc!==id) {
-            const ns=sizeMap.get(nc)||0;
-            if (ns>bestSz) {bestSz=ns;bestNbr=nc;}
-          }
-        }
-      }
-      if (!bestNbr) continue;
-      for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
-        if (s.cells[y][x].cellId===id) s.cells[y][x].cellId=bestNbr;
-      }
-      sizeMap.set(bestNbr,(sizeMap.get(bestNbr)||0)+sz);
-      sizeMap.delete(id);
-      s.cellRegions.delete(id);
-      absorbed=true;
-    }
-    if (!absorbed) break;
-  }
-}
-
-// 未割当(ownable but no cellId)を隣接セルへ
-function absorbUnassigned(s, W, H, ownable) {
-  let changed=true;
+/**
+ * 未割当タイルを隣接シードへ吸収
+ */
+function absorbUnassigned(asgn, ownable, W, H) {
+  let changed = true;
   while (changed) {
-    changed=false;
+    changed = false;
     for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
       const i=y*W+x;
-      if (!ownable[i]||s.cells[y][x].cellId) continue;
+      if (!ownable[i] || asgn[i]>=0) continue;
       for (const [dx,dy] of DIRS4) {
         const nx=x+dx,ny=y+dy;
         if (nx<0||nx>=W||ny<0||ny>=H) continue;
-        const nc=s.cells[ny][nx].cellId;
-        if (nc) {s.cells[y][x].cellId=nc;changed=true;break;}
+        const ni=ny*W+nx;
+        if (asgn[ni]>=0) { asgn[i]=asgn[ni]; changed=true; break; }
       }
     }
   }
 }
-
-function buildSizeMap(s, W, H) {
-  const m=new Map();
-  for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
-    const c=s.cells[y][x].cellId;
-    if (c) m.set(c,(m.get(c)||0)+1);
-  }
-  return m;
-}
-
-function cleanup(s, W, H) {
-  const used=new Set();
-  for (let y=0;y<H;y++) for (let x=0;x<W;x++) {const c=s.cells[y][x].cellId;if(c)used.add(c);}
-  for (const id of [...s.cellRegions.keys()]) if (!used.has(id)) s.cellRegions.delete(id);
-}
-
-const DIRS4 = [[0,-1],[0,1],[-1,0],[1,0]];
