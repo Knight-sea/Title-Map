@@ -13,7 +13,7 @@
 <div class="form-group"><label>森の密度</label><select id="gen-forest"><option>なし</option><option>小</option><option selected>中</option><option>大</option></select></div>
 <div class="form-group"><label>川の量</label><select id="gen-river"><option>なし</option><option selected>小</option><option>中</option><option>大</option></select></div>
 <div class="gen-seed-row"><button class="btn btn-small btn-secondary" id="gen-reseed">🔄 再生成</button></div>
-</div><div class="gen-preview-wrap"><canvas id="gen-preview" width="200" height="200"></canvas></div></div>
+</div><div class="gen-preview-wrap"><canvas id="gen-preview" width="200" height="200" style="width:200px;height:200px;image-rendering:pixelated"></canvas></div></div>
 <div class="gen-actions"><button class="btn btn-secondary" id="gen-back">戻る</button><button class="btn btn-primary" id="gen-confirm">決定</button></div></div></div>
 
 <div id="editor-screen" class="screen">
@@ -60,35 +60,40 @@
 </div></div></div>
 
 <div id="settings-modal" class="modal" hidden><div class="modal-content"><h3>設定</h3><div class="form-group"><label>SoundCloud URL</label><input type="text" id="soundcloud-url" placeholder="https://soundcloud.com/..."></div><div class="modal-actions"><button class="btn btn-secondary" id="settings-cancel">キャンセル</button><button class="btn btn-primary" id="settings-save">保存</button></div></div></div>
-<div id="save-modal" class="modal" hidden><div class="modal-content"><h3>セーブ</h3><div class="form-group"><label>スロット名</label><input type="text" id="save-slot-name"></div><div class="modal-actions"><button class="btn btn-secondary" id="save-cancel">キャンセル</button><button class="btn btn-accent" id="save-export">JSON</button><button class="btn btn-primary" id="save-confirm">保存</button></div></div></div>
+
+<!-- セーブモーダル：スロット選択を追加 -->
+<div id="save-modal" class="modal" hidden><div class="modal-content"><h3>セーブ</h3>
+<div class="form-group"><label>スロット名</label><input type="text" id="save-slot-name"></div>
+<div class="form-group"><label>保存先スロット</label><select id="save-slot-select"></select></div>
+<div class="modal-actions"><button class="btn btn-secondary" id="save-cancel">キャンセル</button><button class="btn btn-accent" id="save-export">JSON出力</button><button class="btn btn-primary" id="save-confirm">保存</button></div></div></div>
+
 <div id="color-picker-modal" class="modal" hidden><div class="modal-content color-picker-content"><h3>色を選択</h3><div class="cp-step"><div class="cp-label">色相</div><div id="cp-hues" class="cp-hues"></div></div><div class="cp-step"><div class="cp-label">明暗</div><div id="cp-shades" class="cp-shades"></div></div><div class="cp-preview-row"><div id="cp-preview" class="cp-preview"></div><span id="cp-name" class="cp-name">-</span></div><div class="modal-actions"><button class="btn btn-secondary" id="color-cancel">キャンセル</button><button class="btn btn-primary" id="color-confirm">決定</button></div></div></div>
 
 <div id="help-modal" class="modal" hidden><div class="modal-content help-content"><h3>操作方法・ショートカット</h3>
 <div class="help-section"><h4>マップ操作</h4><table class="help-table">
 <tr><td>右ドラッグ / 中ドラッグ</td><td>マップ移動（全モード共通）</td></tr>
 <tr><td>WASD / ↑↓←→</td><td>スムーズスクロール</td></tr>
-<tr><td>ホイール</td><td>ズーム（画面中央基準）</td></tr>
-<tr><td>Ctrl+0</td><td>全体表示</td></tr></table></div>
+<tr><td>ホイール</td><td>ズーム</td></tr>
+<tr><td>Ctrl+0</td><td>全体表示</td></tr>
+<tr><td>マップ左クリック（通常モード）</td><td>領地を選択しツリーにフォーカス</td></tr></table></div>
 <div class="help-section"><h4>ツール</h4><table class="help-table">
-<tr><td>1 / 2 / 3 / 4 / 5</td><td>地形ブラシ（平地/森/川/山/海）</td></tr>
-<tr><td>[ / ]</td><td>ブラシサイズ 縮小/拡大</td></tr>
-<tr><td>C</td><td>セル塗りモード ON/OFF</td></tr>
-<tr><td>Space（セル塗り中）</td><td>セル確定 → 次のセル開始</td></tr>
-<tr><td>L</td><td>地形+セル 固定/解除</td></tr>
-<tr><td>T</td><td>地形色表示 ON/OFF</td></tr>
-<tr><td>B</td><td>セル線表示 ON/OFF</td></tr></table></div>
+<tr><td>1〜5</td><td>地形ブラシ</td></tr>
+<tr><td>[ / ]</td><td>ブラシサイズ変更</td></tr>
+<tr><td>C</td><td>セル塗りモード</td></tr>
+<tr><td>Space（セル塗り中）</td><td>次のセル</td></tr>
+<tr><td>L</td><td>固定/解除</td></tr>
+<tr><td>T / B</td><td>地形色 / セル線 表示切替</td></tr></table></div>
 <div class="help-section"><h4>領地</h4><table class="help-table">
-<tr><td>N</td><td>新しい領地の作成開始</td></tr>
-<tr><td>左ドラッグ（作成中）</td><td>セルをスライド選択</td></tr>
-<tr><td>右クリック（作成中）</td><td>セル選択解除</td></tr>
+<tr><td>N</td><td>新しい領地</td></tr>
+<tr><td>ツリーでドラッグ</td><td>領地を並べ替え（アイテム上=子にする、上部ゾーン=前に挿入）</td></tr>
 <tr><td>Enter（作成中）</td><td>領地を確定</td></tr>
-<tr><td>Escape</td><td>モードキャンセル</td></tr></table></div>
+<tr><td>Escape</td><td>キャンセル</td></tr></table></div>
 <div class="help-section"><h4>その他</h4><table class="help-table">
 <tr><td>Ctrl+S</td><td>クイックセーブ</td></tr>
-<tr><td>Ctrl+Z</td><td>元に戻す（最大10回）</td></tr>
-<tr><td>Tab</td><td>領地/プレイヤー タブ切替</td></tr>
-<tr><td>🏠 ボタン</td><td>スロット選択画面に戻る</td></tr></table></div>
-<div class="help-section"><h4>ワークフロー</h4><p class="help-flow">① 地形を塗る → ② セルを塗る（または自動生成） → ③ 固定 → ④ 領地を作成（セル単位で選択） → ⑤ 階層・プレイヤーを設定</p></div>
+<tr><td>Ctrl+Z</td><td>元に戻す</td></tr>
+<tr><td>Tab</td><td>タブ切替</td></tr>
+<tr><td>🏠</td><td>スロット選択に戻る</td></tr></table></div>
+<div class="help-section"><h4>ワークフロー</h4><p class="help-flow">① 地形を塗る → ② セルを塗る（または自動生成） → ③ 固定 → ④ 領地を作成 → ⑤ 階層・プレイヤーを設定</p></div>
 <div class="modal-actions"><button class="btn btn-primary" id="help-close">閉じる</button></div></div></div>
 
 <script type="module" src="js/main.js"></script>

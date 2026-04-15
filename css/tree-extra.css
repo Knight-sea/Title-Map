@@ -1,0 +1,4 @@
+/* ツリー並べ替えドロップゾーン */
+.drop-zone{height:3px;transition:height .1s,background .1s;border-radius:2px;}
+.drop-zone.drop-before{margin-bottom:1px;}
+.drop-zone.active{height:6px;background:var(--primary);}

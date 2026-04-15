@@ -7,3 +7,45 @@ export function getChildren(tid,s){const r=[];for(const t of s.territories.value
 export function getRoots(s){const r=[];for(const t of s.territories.values())if(!t.parentId)r.push(t);r.sort((a,b)=>(a.order||0)-(b.order||0));return r;}
 export function isValidParent(t,pid,s){if(!pid)return true;const p=s.territories.get(pid);if(!p||p.rank>=t.rank)return false;const v=new Set();let c=p;while(c){if(c.id===t.id)return false;if(v.has(c.id))break;v.add(c.id);c=c.parentId?s.territories.get(c.parentId):null;}return true;}
 export function countCells(tid,s){let c=0;for(let y=0;y<s.mapHeight;y++)for(let x=0;x<s.mapWidth;x++)if(s.cells[y][x].territoryId===tid)c++;return c;}
+
+/** 子孫領地のマス数も含む合計 */
+export function countCellsWithChildren(tid,s){
+  let c=countCells(tid,s);
+  for(const child of getChildren(tid,s))c+=countCellsWithChildren(child.id,s);
+  return c;
+}
+
+/** 自身＋全子孫のIDセットを返す */
+export function getSubtreeIds(tid,s){
+  const ids=new Set([tid]);
+  const q=[tid];
+  while(q.length){
+    const cur=q.shift();
+    for(const ch of getChildren(cur,s)){ids.add(ch.id);q.push(ch.id);}
+  }
+  return ids;
+}
+
+/** 兄弟間での並べ替え: moveId を beforeId の直前に移動 */
+export function reorderSiblings(moveId,beforeId,s){
+  const parentId=s.territories.get(moveId)?.parentId??null;
+  const siblings=[...s.territories.values()]
+    .filter(t=>(t.parentId??null)===parentId)
+    .sort((a,b)=>(a.order||0)-(b.order||0));
+  const filtered=siblings.filter(t=>t.id!==moveId);
+  const idx=filtered.findIndex(t=>t.id===beforeId);
+  const moved=s.territories.get(moveId);
+  if(idx>=0)filtered.splice(idx,0,moved);else filtered.push(moved);
+  filtered.forEach((t,i)=>{t.order=i;});
+}
+
+/** リストの末尾に追加 */
+export function reorderSiblingsAppend(moveId,s){
+  const parentId=s.territories.get(moveId)?.parentId??null;
+  const siblings=[...s.territories.values()]
+    .filter(t=>(t.parentId??null)===parentId)
+    .sort((a,b)=>(a.order||0)-(b.order||0));
+  const filtered=siblings.filter(t=>t.id!==moveId);
+  filtered.push(s.territories.get(moveId));
+  filtered.forEach((t,i)=>{t.order=i;});
+}

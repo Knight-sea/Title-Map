@@ -8,19 +8,17 @@ import{generateMap,generatePreview}from'./map/mapgen.js';
 import{autoGenerateCells}from'./map/cellgen.js';
 import{createTerritory}from'./territory/territory.js';
 import{invasionClick}from'./territory/invasion.js';
+import{findDisplayTerritory}from'./territory/hierarchy.js';
 import{pushUndo,undo,snapshotTerritories}from'./undo.js';
 import{saveToSlot,loadFromSlot,getSlotInfo,exportJSON,importJSON,deleteSlot}from'./save.js';
 import{createPlayer}from'./player.js';
 import{initColorPicker}from'./ui/color-picker.js';
-import{renderTree,renderPlayerList,initTreeDrop}from'./ui/tree.js';
+import{renderTree,renderPlayerList,initTreeDrop,scrollToTerritory}from'./ui/tree.js';
 import{renderEditor}from'./ui/editor-panel.js';
 import{initBGM,loadSoundCloud}from'./bgm.js';
 
 let camera,renderer,currentSlot=0,inited=false,genSeed=Date.now(),genMapSize=100;
-
-// Smooth scroll state
 const keys={};
-let scrollRAF=null;
 
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
 
@@ -55,11 +53,13 @@ function initGen(){
     startEditor();};
 }
 
+// プレビューは常に200×200で生成（マップサイズに関係なく同じ見た目）
 function updPreview(){
-  const sz=Math.min(genMapSize,200);
+  const PREVIEW_SIZE=200;
   const params={shape:document.getElementById('gen-shape').value,seaPct:+document.getElementById('gen-sea').value,mountainPct:+document.getElementById('gen-mtn').value,forestDensity:document.getElementById('gen-forest').value,riverDensity:document.getElementById('gen-river').value,seed:genSeed};
-  const img=generatePreview(sz,sz,params);
-  const canvas=document.getElementById('gen-preview');canvas.width=sz;canvas.height=sz;
+  const img=generatePreview(PREVIEW_SIZE,PREVIEW_SIZE,params);
+  const canvas=document.getElementById('gen-preview');
+  canvas.width=PREVIEW_SIZE;canvas.height=PREVIEW_SIZE;
   canvas.getContext('2d').putImageData(img,0,0);
 }
 
@@ -90,14 +90,14 @@ function populateBrushSizes(){const sel=document.getElementById('brush-size');se
 function startScrollLoop(){
   const speed=6;
   const loop=()=>{
-    if(!camera){scrollRAF=requestAnimationFrame(loop);return;}
+    if(!camera){requestAnimationFrame(loop);return;}
     let dx=0,dy=0;
     if(keys['ArrowUp']||keys['KeyW'])dy+=speed;
     if(keys['ArrowDown']||keys['KeyS'])dy-=speed;
     if(keys['ArrowLeft']||keys['KeyA'])dx+=speed;
     if(keys['ArrowRight']||keys['KeyD'])dx-=speed;
     if(dx||dy){camera.pan(dx,dy);renderer.markDirty();updateZoom();}
-    scrollRAF=requestAnimationFrame(loop);
+    requestAnimationFrame(loop);
   };
   loop();
 }
@@ -121,7 +121,28 @@ function initInput(canvas){
       else if(s.ui.mode==='cell'){cellPaint(cell.x,cell.y);painting=true;}
       else if(s.ui.mode==='creation'){const cid=getCellAt(cell.x,cell.y);if(cid){dragMode=s.ui.creationSelectedCells.has(cid)?'remove':'add';if(dragMode==='add')crAdd(cid);else crRem(cid);}painting=true;}
       else if(s.ui.mode==='invasion'){doInvasion(cell.x,cell.y,0);dragMode='add';painting=true;}
-      else{panning=true;lx=e.clientX;ly=e.clientY;canvas.style.cursor='grabbing';}
+      else{
+        // ノーマルモード：クリックした位置の領地を選択
+        if(cell.x>=0&&cell.x<s.mapWidth&&cell.y>=0&&cell.y<s.mapHeight){
+          const tid=s.cells[cell.y]?.[cell.x]?.territoryId;
+          if(tid){
+            const dt=findDisplayTerritory(tid,s.ui.viewLevel);
+            if(dt){
+              setUI({selectedTerritoryId:dt.id,selectedPlayerId:null,activeTab:'territory'});
+              // 領地タブに切り替え
+              document.querySelectorAll('.tab-btn[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab==='territory'));
+              document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+              document.getElementById('territory-tab').classList.add('active');
+              openEditorPanel();
+              renderTree();renderEditor();
+              scrollToTerritory(dt.id);
+              renderer.markDirty();
+              return;
+            }
+          }
+        }
+        panning=true;lx=e.clientX;ly=e.clientY;canvas.style.cursor='grabbing';
+      }
     }
   });
 
@@ -144,7 +165,6 @@ function initInput(canvas){
     keys[e.code]=true;
     if(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;
     const s=getState();
-
     if(e.key==='Escape'){
       if(s.ui.mode==='creation'){setUI({mode:'normal',creationSelectedCells:new Set()});removeBanner();autoCBRestore();renderer.markDirty();}
       else if(s.ui.mode==='invasion'){setUI({mode:'normal',invasionTargetId:null});removeBanner();autoCBRestore();renderer.markDirty();}
@@ -153,11 +173,9 @@ function initInput(canvas){
     }
     if(e.key==='Enter'&&s.ui.mode==='creation'){e.preventDefault();confirmCreation();}
     if(e.key===' '&&s.ui.mode==='cell'){e.preventDefault();nextCell();}
-
     if(e.ctrlKey&&e.key==='z'){e.preventDefault();doUndo();}
     if(e.ctrlKey&&e.key==='0'){e.preventDefault();camera.fitMap(s.mapWidth,s.mapHeight,renderer.viewW,renderer.viewH);renderer.markDirty();updateZoom();}
     if(e.ctrlKey&&e.key==='s'){e.preventDefault();quickSave();}
-
     if(!e.ctrlKey&&!e.metaKey){
       if(e.key==='n'||e.key==='N'){e.preventDefault();enterCreation();}
       if(e.key==='c'||e.key==='C'){e.preventDefault();toggleCellMode();}
@@ -181,18 +199,14 @@ function terrainPaint(cx,cy){const s=getState();if(!s.ui.selectedTerrain||s.lock
 // ===== Cell =====
 function cellPaint(cx,cy){const s=getState();if(s.locked||cx<0||cx>=s.mapWidth||cy<0||cy>=s.mapHeight)return;const cid=s.ui.currentCellId;if(!cid||s.cells[cy][cx].cellId===cid)return;s.cells[cy][cx].cellId=cid;renderer.markDirty();}
 function cellErase(cx,cy){const s=getState();if(s.locked||cx<0||cx>=s.mapWidth||cy<0||cy>=s.mapHeight)return;s.cells[cy][cx].cellId=null;renderer.markDirty();}
-
 function toggleCellMode(){const s=getState();if(s.ui.mode==='cell'){setUI({mode:'normal',currentCellId:null});removeBanner();document.getElementById('btn-cell-mode').classList.remove('active');renderer.markDirty();}else enterCellMode();}
 function enterCellMode(){const s=getState();if(s.locked)return;const id=generateId();s.cellRegions.set(id,{id});setUI({mode:'cell',currentCellId:id,showCellBorders:true});syncChecks();showBanner('セル塗り: 左=塗る 右=消す Space=次のセル Esc=終了','cell');document.getElementById('btn-cell-mode').classList.add('active');renderer.markDirty();}
 function nextCell(){const s=getState();if(s.locked||s.ui.mode!=='cell')return;const id=generateId();s.cellRegions.set(id,{id});setUI({currentCellId:id});showToast('次のセル開始');renderer.markDirty();}
-
 function doAutoCell(){const s=getState();if(s.locked)return;const sz=+document.getElementById('auto-cell-size').value;if(!confirm(`セルサイズ ${sz} で自動生成します。`))return;autoGenerateCells(sz);setUI({showCellBorders:true});syncChecks();renderer.markDirty();}
 
 // ===== Lock =====
 function toggleLock(){const s=getState();if(s.locked){if(!confirm('固定を解除しますか？'))return;s.locked=false;}else{let uc=0;for(let y=0;y<s.mapHeight;y++)for(let x=0;x<s.mapWidth;x++){const c=s.cells[y][x];if(!c.cellId&&TERRAINS[c.terrain].canOwn)uc++;}if(uc>0&&!confirm(`${uc}マスがセル未割当です。固定しますか？`))return;s.locked=true;setUI({mode:'normal',selectedTerrain:null,currentCellId:null});deselectBrush();removeBanner();document.getElementById('btn-cell-mode').classList.remove('active');}updateLockUI();renderer.markDirty();}
 function updateLockUI(){const s=getState(),btn=document.getElementById('btn-lock'),tg=document.getElementById('terrain-group'),cg=document.getElementById('cell-group');if(s.locked){btn.textContent='🔓 固定中';btn.classList.add('locked');tg.classList.add('hidden');cg.classList.add('hidden');}else{btn.textContent='🔒 固定';btn.classList.remove('locked');tg.classList.remove('hidden');cg.classList.remove('hidden');}}
-
-// ===== Cell border auto =====
 function autoCBOn(){const ui=getState().ui;if(!ui.showCellBorders){setUI({showCellBorders:true,cellBordersWasOff:true});syncChecks();}}
 function autoCBRestore(){const ui=getState().ui;if(ui.cellBordersWasOff){setUI({showCellBorders:false,cellBordersWasOff:false});syncChecks();}}
 function syncChecks(){document.getElementById('toggle-cell-borders').checked=getState().ui.showCellBorders;document.getElementById('toggle-terrain-colors').checked=getState().ui.showTerrainColors;}
@@ -201,26 +215,38 @@ function syncChecks(){document.getElementById('toggle-cell-borders').checked=get
 function crAdd(cid){if(!cid)return;const s=getState(),sel=new Set(s.ui.creationSelectedCells);if(!sel.has(cid)){sel.add(cid);setUI({creationSelectedCells:sel});renderer.markDirty();}}
 function crRem(cid){if(!cid)return;const s=getState(),sel=new Set(s.ui.creationSelectedCells);if(sel.has(cid)){sel.delete(cid);setUI({creationSelectedCells:sel});renderer.markDirty();}}
 function creationRight(x,y){const cid=getCellAt(x,y);if(cid)crRem(cid);}
-
 function enterCreation(){const s=getState();if(!s.locked){alert('先にセルを固定してください。');return;}setUI({mode:'creation',creationSelectedCells:new Set()});autoCBOn();showBanner('','creation');
 const banner=document.querySelector('.mode-banner');if(banner){banner.innerHTML='領地作成: 左ドラッグ=セル選択 右=解除 Enter=作成 Esc=キャンセル';const btns=document.createElement('div');btns.style.cssText='margin-top:5px;display:flex;gap:6px;justify-content:center;pointer-events:auto';btns.innerHTML='<button class="btn btn-small btn-primary" id="creation-confirm">作成 (Enter)</button><button class="btn btn-small btn-secondary" id="creation-cancel">キャンセル</button>';banner.appendChild(btns);banner.style.pointerEvents='auto';document.getElementById('creation-confirm').onclick=confirmCreation;document.getElementById('creation-cancel').onclick=()=>{setUI({mode:'normal',creationSelectedCells:new Set()});removeBanner();autoCBRestore();renderer.markDirty();};}renderer.markDirty();}
-
 function confirmCreation(){const s=getState(),sel=s.ui.creationSelectedCells;if(!sel.size){alert('セルを選択してください');return;}const changes=[];for(const cid of sel)for(let y=0;y<s.mapHeight;y++)for(let x=0;x<s.mapWidth;x++)if(s.cells[y][x].cellId===cid)changes.push({x,y,prevTerritoryId:s.cells[y][x].territoryId});pushUndo({territories:snapshotTerritories(),changes});const t=createTerritory('',6,null,{hue:Math.floor(Math.random()*20),shade:2},sel);setUI({mode:'normal',creationSelectedCells:new Set(),selectedTerritoryId:t.id,activeTab:'territory'});removeBanner();autoCBRestore();openEditorPanel();renderTree();renderEditor();renderer.markDirty();setTimeout(()=>{const el=document.getElementById('ed-name');if(el)el.focus();},60);}
 
 // ===== Invasion =====
 function doInvasion(x,y,btn){const ch=invasionClick(x,y,btn);if(ch){pushUndo({changes:ch});renderTree();renderEditor();renderer.markDirty();}}
 function doUndo(){if(undo()){renderTree();renderPlayerList();renderEditor();renderer.markDirty();}}
 
+// ===== セーブモーダル（スロット選択付き）=====
+function openSaveModal(){
+  const s=getState();
+  document.getElementById('save-slot-name').value=s.slotName||'';
+  // スロット選択肢を更新
+  const sel=document.getElementById('save-slot-select');
+  sel.innerHTML='';
+  for(let i=0;i<16;i++){
+    const info=getSlotInfo(i);
+    const o=document.createElement('option');
+    o.value=i;
+    o.textContent=info?`スロット${i+1}: ${info.name}`:`スロット${i+1}: 空き`;
+    if(i===s.currentSlot)o.selected=true;
+    sel.appendChild(o);
+  }
+  document.getElementById('save-modal').hidden=false;
+}
+
 // ===== Toolbar =====
 function initToolbar(){
-  // ★ スロット選択画面に戻るボタン
   document.getElementById('btn-home').onclick=()=>{
     if(confirm('スロット選択画面に戻りますか？\n（未保存の変更は失われます）')){
-      if(renderer){renderer.stop();}
-      buildSlots();
-      showScreen('slot-screen');
-    }
-  };
+      if(renderer)renderer.stop();
+      buildSlots();showScreen('slot-screen');}};
 
   document.querySelectorAll('.brush-btn').forEach(btn=>{btn.onclick=()=>{const t=btn.dataset.terrain;if(getState().ui.selectedTerrain===t){deselectBrush();return;}document.querySelectorAll('.brush-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');setUI({mode:'terrain',selectedTerrain:t});};});
   document.getElementById('brush-size').onchange=e=>setUI({brushSize:+e.target.value});
@@ -242,24 +268,26 @@ function initToolbar(){
   document.getElementById('btn-help').onclick=()=>document.getElementById('help-modal').hidden=false;
   document.getElementById('help-close').onclick=()=>document.getElementById('help-modal').hidden=true;
   document.getElementById('save-cancel').onclick=()=>document.getElementById('save-modal').hidden=true;
-  document.getElementById('save-confirm').onclick=()=>{const s=getState();s.slotName=document.getElementById('save-slot-name').value||s.slotName;saveToSlot(s.currentSlot);document.getElementById('save-modal').hidden=true;};
+  document.getElementById('save-confirm').onclick=()=>{
+    const s=getState();
+    const name=document.getElementById('save-slot-name').value||s.slotName;
+    const slot=+document.getElementById('save-slot-select').value;
+    s.slotName=name;s.currentSlot=slot;currentSlot=slot;
+    saveToSlot(slot);
+    document.getElementById('save-modal').hidden=true;
+    showToast(`スロット${slot+1}に保存しました`);};
   document.getElementById('save-export').onclick=()=>{const s=getState();s.slotName=document.getElementById('save-slot-name').value||s.slotName;exportJSON();};
   document.getElementById('import-file').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{await importJSON(f);startEditor();}catch(err){alert('インポート失敗: '+err.message);}e.target.value='';};
 }
 
 function deselectBrush(){document.querySelectorAll('.brush-btn').forEach(b=>b.classList.remove('active'));setUI({mode:'normal',selectedTerrain:null});}
-
-// ===== Panel =====
 function initPanelToggle(){const tog=document.getElementById('divider-toggle'),panel=document.getElementById('editor-panel');tog.onclick=()=>{const col=panel.classList.contains('collapsed');panel.classList.toggle('collapsed');tog.textContent=col?'▼ 編集パネル':'▲ 編集パネル';};}
 function openEditorPanel(){document.getElementById('editor-panel').classList.remove('collapsed');document.getElementById('divider-toggle').textContent='▼ 編集パネル';}
-
-// ===== Helpers =====
 function showBanner(t,cls){removeBanner();const b=document.createElement('div');b.className=`mode-banner ${cls||''}`;b.textContent=t;document.getElementById('canvas-container').appendChild(b);}
 function removeBanner(){document.querySelectorAll('.mode-banner').forEach(b=>b.remove());}
 function showToast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.getElementById('canvas-container').appendChild(t);setTimeout(()=>t.remove(),1500);}
 function updateZoom(){const el=document.getElementById('zoom-display');if(el&&camera)el.textContent=Math.round(camera.zoom*100)+'%';}
-function quickSave(){saveToSlot(getState().currentSlot);}
-function openSaveModal(){document.getElementById('save-slot-name').value=getState().slotName||'';document.getElementById('save-modal').hidden=false;}
+function quickSave(){saveToSlot(getState().currentSlot);showToast('保存しました');}
 function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
 document.addEventListener('DOMContentLoaded',()=>{buildSlots();initSize();initGen();showScreen('slot-screen');});
